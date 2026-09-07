@@ -20,6 +20,10 @@ if (!globalThis.CodexOverleafGlobalPreferences) {
   importScripts(runtimeBase ? chrome.runtime.getURL(`${runtimeBase}/src/shared/globalPreferences.js`) : 'shared/globalPreferences.js');
 }
 globalThis.CodexOverleafGlobalPreferences?.installBackground(chrome);
+if (!globalThis.CodexOverleafUpdateRuntimeIdentity) {
+  const runtimeBase = String(globalThis.__CODEX_OVERLEAF_RUNTIME_BASE__ || '');
+  importScripts(runtimeBase ? chrome.runtime.getURL(`${runtimeBase}/src/shared/updateRuntimeIdentity.js`) : 'shared/updateRuntimeIdentity.js');
+}
 
 (function initBackground() {
   'use strict';

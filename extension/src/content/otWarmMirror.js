@@ -332,7 +332,7 @@
     if (!response || response.ok === false) {
       return 'unavailable';
     }
-    return response.getState() || response.status || response.result?.getState() || response.result?.status || 'unavailable';
+    return response.state || response.status || response.result?.state || response.result?.status || 'unavailable';
   }
 
   function ensureOtWarmMirrorStateProject(projectId) {
@@ -530,6 +530,7 @@
       }
 
       const response = await sendBackgroundNative(request);
+      if (!canPollOtWarmMirror(projectId)) return { ok: false, skipped: true, reason: 'project_changed' };
       if (!response?.ok) {
         otWarmMirrorState.lastErrorCode = response?.error?.code || response?.error?.message || 'mirror_patch_failed';
         updateOtStatusDisplay('inconsistent');
@@ -558,18 +559,20 @@
 
       otWarmMirrorState.lastPatchAt = Date.now();
       otWarmMirrorState.lastErrorCode = '';
-      if (canPollOtWarmMirror(projectId)) {
+      if (canPollOtWarmMirror(projectId) && !getCurrentRunView()) {
         updateOtStatusDisplay('observing');
       }
       return response;
     } catch (error) {
+      if (!canPollOtWarmMirror(projectId)) return { ok: false, skipped: true, reason: 'project_changed' };
       otWarmMirrorState.lastErrorCode = error?.code || error?.message || 'mirror_patch_failed';
       updateOtStatusDisplay('inconsistent');
       return { ok: false, error };
     } finally {
       otWarmMirrorState.flushing = false;
-      if (otWarmMirrorState.patchQueue.length && canPollOtWarmMirror(projectId) && !getCurrentRunView()) {
-        scheduleOtPatchFlush(projectId, { immediate: true });
+      const nextProjectId = otWarmMirrorState.projectId;
+      if (otWarmMirrorState.patchQueue.length && canPollOtWarmMirror(nextProjectId) && !getCurrentRunView()) {
+        scheduleOtPatchFlush(nextProjectId, { immediate: true });
       }
     }
   }
@@ -781,38 +784,24 @@
   }
 
   async function resolveWarmRunStart(taskContext = {}) {
+    const projectId = getCurrentProjectId();
     const focusFiles = taskContext.focusFiles || [];
     const mode = taskContext.mode || getState()?.mode;
     const mirrorStatus = await getMirrorFreshness();
+    if (getCurrentProjectId() !== projectId) return { useExistingMirror: false, reason: 'project_changed' };
     const otWarmStart = otWarmMirrorController.canUseOtWarmStart({
       enabled: isExperimentalOtEnabled(),
       focusFiles,
       mirrorStatus
     });
-    if (otWarmStart.ok) {
-      return {
-        useExistingMirror: true,
-        warmStart: true,
-        otWarmStart: true,
-        reason: 'ot_focus_fresh',
-        mirrorStatus,
-        focusFiles: otWarmStart.focusFiles,
-        project: {
-          capabilities: {
-            fullProjectSnapshot: false,
-            method: 'ot-warm-mirror'
-          },
-          files: []
-        }
-      };
-    }
-    if (!mirrorStatus?.exists || !isMirrorReusable(mirrorStatus)) {
+    if (!mirrorStatus?.exists || (!otWarmStart.ok && !isMirrorReusable(mirrorStatus))) {
       return { useExistingMirror: false, reason: 'mirror_not_fresh', mirrorStatus };
     }
 
     let overlayProject = null;
     try {
       overlayProject = await callPageBridge('getProjectSnapshot', {
+        projectId,
         force: true,
         maxAgeMs: 0,
         preferLightweight: true,
@@ -826,6 +815,7 @@
     } catch (error) {
       return { useExistingMirror: false, reason: 'overlay_probe_failed', mirrorStatus };
     }
+    if (getCurrentProjectId() !== projectId) return { useExistingMirror: false, reason: 'project_changed' };
     const fileOverlays = buildSnapshotFileOverlays(overlayProject, focusFiles);
     if (!fileOverlays.length) {
       return { useExistingMirror: false, reason: 'missing_current_overlay', mirrorStatus };
@@ -840,7 +830,9 @@
     return {
       useExistingMirror: true,
       warmStart: true,
-      reason: mode === 'ask' ? 'warm_whole_project_ask' : 'warm_whole_project',
+      otWarmStart: otWarmStart.ok,
+      focusFiles,
+      reason: otWarmStart.ok ? 'ot_focus_fresh' : mode === 'ask' ? 'warm_whole_project_ask' : 'warm_whole_project',
       mirrorStatus,
       fileOverlays,
       project: overlayProject

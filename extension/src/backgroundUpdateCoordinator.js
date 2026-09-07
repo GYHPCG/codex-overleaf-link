@@ -4,6 +4,7 @@
   const UPDATE_STATE_KEY = 'codex-overleaf-managed-update-state-v1';
   const CONSENT_STATE_KEY = 'codex-overleaf-update-consent-v1';
   const UPDATE_RELOAD_TABS_KEY = 'codex-overleaf-managed-update-tabs-v1';
+  const MANUAL_RELOAD_TABS_KEY = 'codex-overleaf-manual-runtime-reload-v1';
   const CHECK_ALARM = 'codex-overleaf-consent-update-check';
   const IDLE_ALARM = 'codex-overleaf-consent-update-idle';
   const WATCHDOG_ALARM = 'codex-overleaf-consent-update-watchdog';
@@ -12,7 +13,7 @@
   const CHECK_INTERVAL_MINUTES = 24 * 60;
   const SNOOZE_MS = 24 * 60 * 60 * 1000;
   const CANDIDATE_MAX_AGE_MS = 5 * 60 * 1000;
-  const CHECK_REQUEST_TIMEOUT_MS = 15 * 1000;
+  const CHECK_REQUEST_TIMEOUT_MS = 55 * 1000;
   const ACTIVATION_TIMEOUT_MS = 20 * 1000;
   const ACTIVATION_POLL_MS = 250;
   const FAST_IDLE_RETRY_MS = 4000;
@@ -31,7 +32,8 @@
     'codex-overleaf/consent-update-check',
     'codex-overleaf/consent-update-install',
     'codex-overleaf/consent-update-later',
-    'codex-overleaf/consent-update-dismiss'
+    'codex-overleaf/consent-update-dismiss',
+    'codex-overleaf/consent-update-reload'
   ]);
 
   const policy = root.CodexOverleafUpdateConsent;
@@ -41,6 +43,10 @@
   let policyTail = Promise.resolve();
   let idleRetryTimer = null;
   let activationPromise = null;
+  let runtimeStatus = null;
+  let runtimeStatusAt = 0;
+  let runtimeStatusRead = null;
+  let runtimeReloadMessage = '';
 
   function init(options = {}) {
     if (initialized || !policy || !revocation) return;
@@ -92,6 +98,7 @@
     await reconcileRecoveryState();
     await settleTerminalConsent();
     await armLegacyGuard();
+    await finishManualRuntimeReload();
     await publishView();
     const updateState = await getUpdateState();
     if (['staged', 'waiting_for_idle'].includes(updateState.state)) {
@@ -129,6 +136,8 @@
         return postponeUpdate();
       case 'codex-overleaf/consent-update-dismiss':
         return dismissCompletedUpdate();
+      case 'codex-overleaf/consent-update-reload':
+        return reloadInstalledRuntime();
       default:
         throw codedError('unknown_update_action', 'Unknown update action.');
     }
@@ -648,11 +657,86 @@
   }
 
   async function getView() {
-    const [state, consent] = await Promise.all([getUpdateState(), getConsentState()]);
-    return policy.deriveViewModel(state, consent, {
+    let [state, consent] = await Promise.all([getUpdateState(), getConsentState()]);
+    const busy = state.state === 'checking' || policy.isExecutionState(state.state) || consent.authorizationId;
+    const runtime = busy ? { state: 'transaction_active' } : await readRuntimeStatus();
+    if (runtime.state === 'aligned' && ['failed', 'rolled_back'].includes(state.state) &&
+        policy.compareStableVersions(state.latestVersion || state.currentVersion, runtime.installedVersion) <= 0) {
+      state = await setUpdateState({ ...state, state: 'idle', currentVersion: runtime.installedVersion,
+        latestVersion: runtime.installedVersion, code: '', message: '', transactionId: '', blocker: '', blockers: [] });
+    }
+    const view = policy.deriveViewModel(state, consent, {
       currentVersion: currentVersion(),
       now: Date.now()
     });
+    view.runtime = runtime;
+    const pending = (await chrome.storage.local.get(MANUAL_RELOAD_TABS_KEY))?.[MANUAL_RELOAD_TABS_KEY];
+    const pagesPending = runtime.state === 'aligned' && pending?.targetVersion === runtime.installedVersion && pending.tabIds?.length;
+    if (runtime.state === 'reload_required' || pagesPending) {
+      view.showPanel = true;
+      view.state = { ...state, state: pagesPending ? 'reload_tabs_required' : 'reload_required',
+        currentVersion: runtime.extensionVersion, latestVersion: runtime.installedVersion,
+        code: 'update_reload_required', message: runtimeReloadMessage };
+      view.badge = { text: 'UP', color: '#3578bd' };
+    }
+    return view;
+  }
+
+  async function readRuntimeStatus(force = false) {
+    if (!root.CodexOverleafUpdateRuntimeIdentity) return { state: 'unknown' };
+    if (!force && runtimeStatus && Date.now() - runtimeStatusAt < 5000) return runtimeStatus;
+    if (runtimeStatusRead) return runtimeStatusRead;
+    runtimeStatusRead = withTimeout(requestNative('update.status'), 4000,
+      codedError('update_status_timeout', 'Installed version inspection timed out.')).then(status => {
+      runtimeStatusAt = Date.now();
+      runtimeStatus = root.CodexOverleafUpdateRuntimeIdentity.inspectInstalledRuntime(status, {
+        extensionVersion: chrome.runtime.getManifest().version, runtimeVersion: currentVersion()
+      });
+      return runtimeStatus;
+    }).catch(() => ({ state: 'unknown' })).finally(() => { runtimeStatusRead = null; });
+    return runtimeStatusRead;
+  }
+
+  async function requireReloadSafePoint() {
+    const tabs = await chrome.tabs.query({ url: OVERLEAF_MATCHES });
+    const probes = await Promise.all(tabs.filter(isUsableEditorTab).map(tab => probeTabIdle(tab.id)));
+    const nativeGate = await requestNative('update.canApply').then(result => ({ ok: true, result }))
+      .catch(error => ({ ok: false, error: safeError(error) }));
+    const blockers = root.CodexOverleafUpdateStatus?.collectBlockers(probes, nativeGate) || ['busy'];
+    if (nativeBridge?.getPendingState?.().executionRequests > 0) blockers.push('background_execution_pending');
+    if (blockers.length) {
+      runtimeReloadMessage = 'Reload is waiting for Overleaf to be saved and idle (' + blockers.join(', ') + ').';
+      throw codedError('update_reload_busy', runtimeReloadMessage);
+    }
+    runtimeReloadMessage = '';
+    return tabs.filter(tab => Number.isInteger(tab.id) && !tab.discarded && tab.status !== 'unloaded');
+  }
+
+  async function reloadInstalledRuntime() {
+    const runtime = await readRuntimeStatus(true);
+    if (runtime.state === 'aligned') { await finishManualRuntimeReload(); return getView(); }
+    if (runtime.state !== 'reload_required') throw codedError('update_reload_unavailable', 'No verified installed update is awaiting reload.');
+    const tabs = await requireReloadSafePoint();
+    await chrome.storage.local.set({ [MANUAL_RELOAD_TABS_KEY]: {
+      targetVersion: runtime.installedVersion, tabIds: tabs.map(tab => tab.id)
+    } });
+    setTimeout(() => chrome.runtime.reload(), 0);
+    return getView();
+  }
+
+  async function finishManualRuntimeReload() {
+    const pending = (await chrome.storage.local.get(MANUAL_RELOAD_TABS_KEY))?.[MANUAL_RELOAD_TABS_KEY];
+    if (!pending || !Array.isArray(pending.tabIds)) return;
+    const runtime = await readRuntimeStatus(true);
+    if (runtime.state !== 'aligned' || runtime.installedVersion !== pending.targetVersion) return;
+    let tabs;
+    try { tabs = await requireReloadSafePoint(); } catch (_error) { return; }
+    const remaining = [];
+    for (const tab of tabs.filter(tab => pending.tabIds.includes(tab.id))) {
+      try { await chrome.tabs.reload(tab.id); } catch (_error) { remaining.push(tab.id); }
+    }
+    if (remaining.length) await chrome.storage.local.set({ [MANUAL_RELOAD_TABS_KEY]: { ...pending, tabIds: remaining } });
+    else await chrome.storage.local.remove(MANUAL_RELOAD_TABS_KEY);
   }
 
   async function publishView() {

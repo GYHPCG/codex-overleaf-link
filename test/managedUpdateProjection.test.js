@@ -33,7 +33,7 @@ test('managed update projection derives deadlines without rejecting recovery tra
     { state: 'checking', currentVersion: '2.2.1' },
     { merge: false, now: 1000 }
   );
-  assert.equal(checking.deadlineAt, 31000);
+  assert.equal(checking.deadlineAt, 61000);
   const applying = projection.transition(
     { state: 'staged', currentVersion: '2.2.1' },
     { state: 'applying', currentVersion: '2.2.1' },
@@ -54,7 +54,7 @@ test('same-phase observations refresh heartbeat without extending the deadline',
   );
   const heartbeat = projection.transition(checking, { message: 'still checking' }, { now: 5000 });
   assert.equal(heartbeat.phaseStartedAt, 1000);
-  assert.equal(heartbeat.deadlineAt, 31000);
+  assert.equal(heartbeat.deadlineAt, 61000);
   assert.equal(heartbeat.heartbeatAt, 5000);
 });
 

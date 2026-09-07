@@ -252,9 +252,13 @@
         };
       }
       try {
+        const text = deps.readActiveEditorText();
+        if (typeof text !== 'string') {
+          return { ok: false, reason: 'missing_editor_content' };
+        }
         return {
           ok: true,
-          text: String(deps.readActiveEditorText() ?? '')
+          text
         };
       } catch (_error) {
         return {

@@ -762,6 +762,10 @@ function loadBackgroundHarness(options = {}) {
           sandbox.CodexOverleafGlobalPreferences = require('../extension/src/shared/globalPreferences');
           continue;
         }
+        if (scriptPath === 'shared/updateRuntimeIdentity.js') {
+          sandbox.CodexOverleafUpdateRuntimeIdentity = require('../extension/src/shared/updateRuntimeIdentity');
+          continue;
+        }
         throw new Error(`Unexpected importScripts path: ${scriptPath}`);
       }
     },

@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.3.6 - 2026-09-07
+
+### Changed
+
+- Share bounded, retryable release downloads between the real updater and update-hop rehearsals, including full-body deadlines, incremental size limits, proxy configuration and actionable network errors.
+- Distinguish installed files from running Extension and Native Host versions, with safe-point reload guidance and recovery of obsolete failure notices after a verified manual reinstall.
+
+### Fixed
+
+- Keep bootstrap rechecks bound to the existing signed update authorization instead of requiring another latest-release network request after consent.
+- Restore experimental OT warm-mirror startup from serialized page responses, reject unavailable editor content, expire old per-file freshness and verify current focus overlays before reuse.
+- Keep late OT patch responses scoped to their original project so navigation cannot corrupt the next project's observation status.
+
 ## v2.3.5 - 2026-09-06
 
 ### Fixed

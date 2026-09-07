@@ -10,6 +10,7 @@
   const OT_POLL_INTERVAL_MS = 1000;
   const OT_PATCH_DEBOUNCE_MS = 500;
   const OT_MAX_PATCH_BATCH = 25;
+  const OT_FRESHNESS_MAX_AGE_MS = 30000;
   const PAUSE_STATES = new Set(['running', 'writing', 'undoing', 'compiling']);
 
   function buildPatchFilesRequest({ projectId, events, nativeCompatibility } = {}) {
@@ -67,13 +68,14 @@
     return { pause: false };
   }
 
-  function canUseOtWarmStart({ enabled, focusFiles, mirrorStatus } = {}) {
+  function canUseOtWarmStart({ enabled, focusFiles, mirrorStatus, now = Date.now() } = {}) {
     if (!enabled) {
       return { ok: false, reason: 'disabled' };
     }
     if (!mirrorStatus || mirrorStatus.exists !== true) {
       return { ok: false, reason: 'mirror_missing' };
     }
+    if (mirrorStatus.dirty === true) return { ok: false, reason: 'mirror_dirty' };
 
     const normalizedFocusFiles = normalizePaths(focusFiles);
     if (!normalizedFocusFiles.length) {
@@ -85,6 +87,8 @@
       if (file?.state !== 'fresh') {
         continue;
       }
+      const age = now - Date.parse(file.lastPatchAt || '');
+      if (!Number.isFinite(age) || age < 0 || age > OT_FRESHNESS_MAX_AGE_MS) continue;
       const filePath = normalizePath(file.path);
       if (filePath) {
         freshFiles.add(filePath);
@@ -165,6 +169,7 @@
     OT_POLL_INTERVAL_MS,
     OT_PATCH_DEBOUNCE_MS,
     OT_MAX_PATCH_BATCH,
+    OT_FRESHNESS_MAX_AGE_MS,
     buildPatchFilesRequest,
     canUseOtWarmStart,
     normalizePath,

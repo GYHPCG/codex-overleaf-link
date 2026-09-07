@@ -90,7 +90,8 @@
         install: 'codex-overleaf/consent-update-install',
         retry: 'codex-overleaf/consent-update-check',
         later: 'codex-overleaf/consent-update-later',
-        dismiss: 'codex-overleaf/consent-update-dismiss'
+        dismiss: 'codex-overleaf/consent-update-dismiss',
+        reload: 'codex-overleaf/consent-update-reload'
       }[action]);
     } catch (error) {
       currentView = await reconcileAfterActionError(error, {
@@ -212,7 +213,10 @@
     const stateName = currentView?.state?.state || 'idle';
     let requestedAction = 'check';
     try {
-      if (stateName === 'update_available') {
+      if (['reload_required', 'reload_tabs_required'].includes(stateName)) {
+        requestedAction = 'reload';
+        currentView = await request('codex-overleaf/consent-update-reload');
+      } else if (stateName === 'update_available') {
         requestedAction = 'install';
         currentView = await request('codex-overleaf/consent-update-install');
       } else if (['failed', 'rolled_back'].includes(stateName)) {
@@ -276,7 +280,7 @@
       body.append(recovery, command);
     }
 
-    if (!['update_available', 'failed', 'rolled_back'].includes(state.state)) {
+    if (!['update_available', 'failed', 'rolled_back', 'reload_required', 'reload_tabs_required'].includes(state.state)) {
       const bar = document.createElement('div');
       bar.className = 'codex-update-notice-progress' + (progress.determinate ? '' : ' is-indeterminate');
       bar.setAttribute('role', 'progressbar');
@@ -328,7 +332,11 @@
     let statusText = '';
     let buttonText = tx('Check for updates', '检查更新');
 
-    if (stateName === 'checking') {
+    if (['reload_required', 'reload_tabs_required'].includes(stateName)) {
+      summaryText = tx(`Installed v${latestVersion}; running extension v${currentVersion}.`, `已安装 v${latestVersion}；扩展当前运行 v${currentVersion}。`);
+      statusText = getCopy(state).detail;
+      buttonText = stateName === 'reload_required' ? tx('Reload extension', '重新加载扩展') : tx('Refresh Overleaf tabs', '刷新 Overleaf 标签页');
+    } else if (stateName === 'checking') {
       statusText = tx('Checking the latest stable release…', '正在检查最新稳定版本…');
       buttonText = tx('Checking…', '检查中…');
     } else if (stateName === 'update_available') {
@@ -355,6 +363,10 @@
 
   function visibleActions(state) {
     if (actionInFlight) return [];
+    if (['reload_required', 'reload_tabs_required'].includes(state)) {
+      return [{ id: 'reload', label: state === 'reload_required'
+        ? tx('Reload extension', '重新加载扩展') : tx('Refresh Overleaf tabs', '刷新 Overleaf 标签页'), primary: true }];
+    }
     if (state === 'update_available') {
       return [
         { id: 'later', label: tx('Later', '稍后'), primary: false },
@@ -380,6 +392,14 @@
     const target = state.latestVersion ? 'v' + state.latestVersion : '';
     const blocker = blockersCopy(state.blockers?.length ? state.blockers : [state.blocker]);
     return {
+      reload_required: {
+        eyebrow: tx('Installed, awaiting reload', '已安装，等待加载'), title: target,
+        detail: state.message || tx('The new files are installed. Reload the extension when Overleaf is saved and idle.', '新版文件已安装，请在 Overleaf 保存并空闲后重新加载扩展。')
+      },
+      reload_tabs_required: {
+        eyebrow: tx('Updated runtime is ready', '新版运行组件已就绪'), title: target,
+        detail: state.message || tx('Refresh the saved, idle Overleaf tabs to load the updated panel.', '刷新已保存且空闲的 Overleaf 标签页以加载新版面板。')
+      },
       update_available: {
         eyebrow: tx('Update available', '发现新版本'),
         title: target,

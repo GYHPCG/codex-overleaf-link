@@ -214,7 +214,7 @@ test('canUseOtWarmStart reports explicit blocker reasons before checking coverag
   assert.deepEqual(Controller.canUseOtWarmStart({
     enabled: false,
     focusFiles: ['main.tex'],
-    mirrorStatus: { exists: true, otFreshFiles: [{ path: 'main.tex', state: 'fresh' }] }
+    mirrorStatus: { exists: true, otFreshFiles: [{ path: 'main.tex', state: 'fresh', lastPatchAt: new Date().toISOString() }] }
   }), {
     ok: false,
     reason: 'disabled'
@@ -246,8 +246,8 @@ test('canUseOtWarmStart only allows normalized focused files covered by fresh OT
     mirrorStatus: {
       exists: true,
       otFreshFiles: [
-        { path: 'main.tex', state: 'fresh' },
-        { path: 'sections/intro.tex', state: 'fresh' },
+        { path: 'main.tex', state: 'fresh', lastPatchAt: new Date().toISOString() },
+        { path: 'sections/intro.tex', state: 'fresh', lastPatchAt: new Date().toISOString() },
         { path: 'stale.tex', state: 'stale' }
       ]
     }
@@ -264,7 +264,7 @@ test('canUseOtWarmStart only allows normalized focused files covered by fresh OT
     mirrorStatus: {
       exists: true,
       otFreshFiles: [
-        { path: 'main.tex', state: 'fresh' },
+        { path: 'main.tex', state: 'fresh', lastPatchAt: new Date().toISOString() },
         { path: 'stale.tex', state: 'stale' }
       ]
     }

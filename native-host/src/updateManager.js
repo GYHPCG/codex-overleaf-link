@@ -11,6 +11,8 @@ const {
   verifySignedReleaseManifest
 } = require('./updateTrust');
 const { extractVerifiedUpdateBundle } = require('./updateArchive');
+const { requestRelease } = require('./releaseTransport');
+const RUNNING_VERSION = require('../../package.json').version;
 
 const GITHUB_LATEST_URL = 'https://github.com/Ghqqqq/codex-overleaf-link/releases/latest';
 const GITHUB_RELEASE_DOWNLOAD_ROOT = 'https://github.com/Ghqqqq/codex-overleaf-link/releases/download';
@@ -175,11 +177,11 @@ function delay(milliseconds) {
 }
 
 async function checkForUpdate(context, params = {}, options = {}) {
-  const fetchImpl = options.fetch || globalThis.fetch;
-  if (typeof fetchImpl !== 'function') {
-    throw updateError('update_network_unavailable', 'This Node runtime cannot check GitHub Releases.');
-  }
+  const fetchImpl = options.fetch;
+  const network = { ...options.network, deadlineAt: Date.now() + 40000 };
   const currentVersion = normalizeCurrentVersion(params.currentVersion, context);
+  const authorized = readAuthorizedCandidate(context, currentVersion);
+  if (authorized) return authorized;
   const headers = {
     Accept: 'text/html,application/xhtml+xml',
     'User-Agent': 'codex-overleaf-link-updater'
@@ -187,11 +189,13 @@ async function checkForUpdate(context, params = {}, options = {}) {
   if (params.etag && typeof params.etag === 'string' && params.etag.length < 300) {
     headers['If-None-Match'] = params.etag;
   }
-  const releaseResponse = await fetchWithTimeout(fetchImpl, GITHUB_LATEST_URL, {
+  const releaseResponse = await requestRelease(GITHUB_LATEST_URL, {
+    ...network, fetch: fetchImpl, stage: 'version_check',
     headers,
     method: 'HEAD',
-    redirect: 'follow'
-  }, 12000);
+    allowedHosts: new Set(['github.com']),
+    httpErrorCode: 'update_github_http_error'
+  });
   if (releaseResponse.status === 304) {
     const candidate = readJsonSafe(path.join(context.updatesRoot, CANDIDATE_FILE), null);
     if (candidate?.manifestBase64 && candidate?.signatureBase64) {
@@ -247,12 +251,12 @@ async function checkForUpdate(context, params = {}, options = {}) {
   const manifestBytes = await fetchReleaseAsset(
     fetchImpl,
     buildReleaseAssetUrl(releaseTag, 'release-manifest.json'),
-    256 * 1024
+    256 * 1024, { ...network, stage: 'release_manifest' }
   );
   const signatureBytes = await fetchReleaseAsset(
     fetchImpl,
     buildReleaseAssetUrl(releaseTag, 'release-manifest.sig'),
-    16 * 1024
+    16 * 1024, { ...network, stage: 'release_signature' }
   );
   const manifest = verifySignedReleaseManifest(manifestBytes, signatureBytes);
   if (manifest.version !== latestVersion || manifest.tag !== releaseTag) {
@@ -269,6 +273,24 @@ async function checkForUpdate(context, params = {}, options = {}) {
   };
   atomicWriteJson(path.join(context.updatesRoot, CANDIDATE_FILE), candidate);
   return { managed: true, available: true, currentVersion, latestVersion, etag: candidate.etag };
+}
+
+function readAuthorizedCandidate(context, currentVersion) {
+  const authorization = readAuthorization(context);
+  if (!authorization || !['authorized', 'bound'].includes(authorization.state)) return null;
+  const candidate = readJsonSafe(path.join(context.updatesRoot, CANDIDATE_FILE), null);
+  if (!candidate) throw updateError('update_candidate_missing', 'The authorized update candidate is missing.');
+  const manifest = verifySignedReleaseManifest(
+    Buffer.from(candidate.manifestBase64 || '', 'base64'),
+    Buffer.from(candidate.signatureBase64 || '', 'base64')
+  );
+  if (candidate.latestVersion !== manifest.version || authorization.targetVersion !== manifest.version ||
+      authorization.sourceVersion !== currentVersion || !isNewerStableVersion(manifest.version, currentVersion)) {
+    throw updateError('update_consent_mismatch', 'The signed candidate no longer matches the authorized update.');
+  }
+  requireAuthorization(context, manifest.version, ['authorized', 'bound']);
+  return { managed: true, available: true, currentVersion, latestVersion: manifest.version,
+    etag: candidate.etag || '', cached: true, authorized: true };
 }
 
 function parseStableReleaseTag(value) {
@@ -388,8 +410,8 @@ async function stageCandidate(context, options = {}) {
   fs.mkdirSync(stageRoot, { recursive: true, mode: 0o700 });
   try {
     const archivePath = path.join(stageRoot, manifest.updateBundle.name);
-    const fetchImpl = options.fetch || globalThis.fetch;
-    const bundleBytes = await fetchReleaseAsset(fetchImpl, candidate.bundleUrl, manifest.updateBundle.size + 1);
+    const bundleBytes = await fetchReleaseAsset(options.fetch, candidate.bundleUrl, manifest.updateBundle.size + 1,
+      { ...options.network, totalTimeoutMs: 90000, timeoutMs: 30000, stage: 'update_bundle' });
     if (bundleBytes.length !== manifest.updateBundle.size) {
       throw updateError('update_bundle_size_mismatch', 'Downloaded update bundle size does not match the signed manifest.');
     }
@@ -764,6 +786,8 @@ function recoverAndReadStatus(context) {
   return {
     managed: true,
     activeVersion: readVersionPointer(context.nativeRoot, 'active-version'),
+    runtimeVersion: context.env?.CODEX_OVERLEAF_ACTIVE_VERSION || RUNNING_VERSION,
+    installedAligned: Boolean(alignedVersion),
     previousVersion: readVersionPointer(context.nativeRoot, 'previous-version'),
     transaction: journal ? publicTransaction(journal) : null,
     authorization: publicAuthorization(readAuthorization(context))
@@ -941,38 +965,15 @@ function rewriteManagedManifestVersion(manifestPath, version) {
   atomicWriteText(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 }
 
-async function fetchReleaseAsset(fetchImpl, url, limit) {
+async function fetchReleaseAsset(fetchImpl, url, limit, network = {}) {
   const parsed = new URL(String(url || ''));
   if (parsed.protocol !== 'https:' || parsed.hostname !== 'github.com' || !parsed.pathname.startsWith('/Ghqqqq/codex-overleaf-link/releases/download/')) {
     throw updateError('update_asset_url_forbidden', 'Release asset URL is outside the trusted repository.');
   }
-  const response = await fetchWithTimeout(fetchImpl, parsed.href, { redirect: 'follow' }, 20000);
-  if (!response.ok) throw updateError('update_asset_http_error', 'Release asset download failed with HTTP ' + response.status + '.');
-  const finalUrl = new URL(response.url || parsed.href);
-  if (finalUrl.protocol !== 'https:' || !RELEASE_ASSET_HOSTS.has(finalUrl.hostname)) {
-    throw updateError('update_asset_redirect_forbidden', 'Release asset redirected to an untrusted host.');
-  }
-  return readResponseBytes(response, limit);
-}
-
-async function fetchWithTimeout(fetchImpl, url, options, timeoutMs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetchImpl(url, { ...options, signal: controller.signal });
-  } catch (error) {
-    throw updateError('update_network_failed', 'Update network request failed.', { cause: error });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function readResponseBytes(response, limit) {
-  const declared = Number(response.headers?.get?.('content-length') || 0);
-  if (declared > limit) throw updateError('update_download_limit', 'Update response exceeds its size limit.');
-  const buffer = Buffer.from(await response.arrayBuffer());
-  if (!buffer.length || buffer.length > limit) throw updateError('update_download_limit', 'Update response exceeds its size limit.');
-  return buffer;
+  const response = await requestRelease(parsed.href, {
+    timeoutMs: 20000, ...network, fetch: fetchImpl, limit, allowedHosts: RELEASE_ASSET_HOSTS
+  });
+  return response.bytes;
 }
 
 function findReleaseAsset(assets, name) {

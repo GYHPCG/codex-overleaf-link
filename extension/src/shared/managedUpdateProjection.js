@@ -26,7 +26,7 @@
   ]);
 
   const PHASE_TIMEOUTS = Object.freeze({
-    checking: 30 * 1000,
+    checking: 60 * 1000,
     downloading: 2 * 60 * 1000,
     applying: 90 * 1000,
     awaiting_health: 2 * 60 * 1000,

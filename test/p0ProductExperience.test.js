@@ -1278,10 +1278,11 @@ test('focused OT freshness is checked before project-level warm mirror freshness
   );
   assert.match(warmStartBody, /enabled:\s*isExperimentalOtEnabled\(\)/);
   assert.match(warmStartBody, /focusFiles/);
-  assert.match(warmStartBody, /otWarmStart:\s*true/);
-  assert.match(warmStartBody, /reason:\s*'ot_focus_fresh'/);
-  assert.match(warmStartBody, /fullProjectSnapshot:\s*false/);
-  assert.match(warmStartBody, /method:\s*'ot-warm-mirror'/);
+  assert.match(warmStartBody, /otWarmStart:\s*otWarmStart\.ok/);
+  assert.match(warmStartBody, /otWarmStart\.ok\s*\?\s*'ot_focus_fresh'/);
+  assert.match(warmStartBody, /requireFullProject:\s*false/);
+  assert.match(warmStartBody, /force:\s*true[\s\S]*maxAgeMs:\s*0/);
+  assert.match(warmStartBody, /fileOverlays/);
   assert.match(otWarmMirrorController, /reason:\s*'no_focus_files'/);
   assert.doesNotMatch(warmStartBody, /otFreshFileCount/);
 });
