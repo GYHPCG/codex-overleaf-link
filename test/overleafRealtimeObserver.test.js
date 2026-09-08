@@ -187,6 +187,9 @@ test('start initializes active editor state and queues an event for same-file in
   harness.setEditorText('hello world');
   harness.fireInput();
 
+  assert.equal(harness.normalizeCalls.length, 0, 'normalization is deferred until drain');
+  assert.equal(harness.observer.getStatus().queuedEventCount, 1);
+  harness.observer.drainEvents();
   assert.deepEqual(harness.normalizeCalls, [
     {
       path: 'main.tex',
@@ -196,7 +199,7 @@ test('start initializes active editor state and queues an event for same-file in
       source: 'active-editor'
     }
   ]);
-  assert.equal(harness.observer.getStatus().queuedEventCount, 1);
+  assert.equal(harness.observer.getStatus().queuedEventCount, 0);
   assert.equal(harness.observer.getStatus().lastEventAt, '2026-05-05T00:00:00.000Z');
 });
 
@@ -269,6 +272,7 @@ test('direct input switch adopts new active file as baseline when no selection e
   harness.setEditorText('intro baseline plus edit');
   harness.fireInput();
 
+  harness.observer.drainEvents();
   assert.equal(harness.normalizeCalls.length, 1);
   assert.equal(harness.normalizeCalls[0].path, 'sections/intro.tex');
   assert.equal(harness.normalizeCalls[0].previousContent, 'intro baseline');
@@ -290,11 +294,12 @@ test('selection events refresh active baseline so the first typed edit in a new 
   harness.setEditorText('intro baseline plus edit');
   harness.fireInput();
 
+  const events = harness.observer.drainEvents();
   assert.equal(harness.normalizeCalls.length, 1);
   assert.equal(harness.normalizeCalls[0].path, 'sections/intro.tex');
   assert.equal(harness.normalizeCalls[0].previousContent, 'intro baseline');
   assert.equal(harness.normalizeCalls[0].nextContent, 'intro baseline plus edit');
-  assert.equal(harness.observer.drainEvents()[0].path, 'sections/intro.tex');
+  assert.equal(events[0].path, 'sections/intro.tex');
 });
 
 test('editor read failures do not queue deletion events or reset the baseline', () => {
@@ -313,6 +318,7 @@ test('editor read failures do not queue deletion events or reset the baseline', 
   harness.setEditorText('hello world');
   harness.fireInput();
 
+  harness.observer.drainEvents();
   assert.equal(harness.normalizeCalls.length, 1);
   assert.equal(harness.normalizeCalls[0].previousContent, 'hello');
   assert.equal(harness.normalizeCalls[0].nextContent, 'hello world');
@@ -327,6 +333,7 @@ test('invalid observed timestamps fall back to Date.now without throwing', () =>
     outOfRange.setEditorText('hello world');
 
     assert.doesNotThrow(() => outOfRange.fireInput());
+    outOfRange.observer.drainEvents();
     assert.equal(outOfRange.normalizeCalls[0].observedAt, '2026-05-05T01:02:03.000Z');
 
     const throwingClock = createHarness({
@@ -338,6 +345,7 @@ test('invalid observed timestamps fall back to Date.now without throwing', () =>
     throwingClock.setEditorText('hello world');
 
     assert.doesNotThrow(() => throwingClock.fireInput());
+    throwingClock.observer.drainEvents();
     assert.equal(throwingClock.normalizeCalls[0].observedAt, '2026-05-05T01:02:03.000Z');
   } finally {
     Date.now = originalDateNow;

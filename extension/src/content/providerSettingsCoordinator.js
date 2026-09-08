@@ -59,6 +59,7 @@
     return {
       open: () => open(instance),
       refreshSummary: () => refreshSummary(instance),
+      renderSummary: () => updateSettingsSummary(instance),
       ensureLoaded: () => ensureLoaded(instance),
       getRunSelection: providerId => instance.loaded
         ? Profiles.buildRunSelection(instance.catalog, providerId || instance.getSelectedProviderId())

@@ -1581,7 +1581,7 @@
 
 #codex-overleaf-panel .codex-set-row-help {
   margin: 0;
-  color: var(--tl-fg-4);
+  color: var(--tl-fg-3);
   font-size: 11px;
   line-height: 1.45;
 }
@@ -2170,7 +2170,7 @@
   padding: 4px 10px;
   font-size: 11px;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
   animation: tl-fade-in 120ms ease-out;
 }
 
@@ -2183,6 +2183,32 @@
 #codex-overleaf-panel .tl-jump-latest:hover {
   color: var(--tl-fg-1);
   border-color: var(--tl-border-strong);
+}
+
+/* Let the browser anchor backscroll while the reader is detached. */
+#codex-overleaf-panel [data-log][data-log-auto-follow="false"],
+#codex-overleaf-panel [data-main][data-log-auto-follow="false"] {
+  overflow-anchor: auto;
+}
+
+#codex-overleaf-panel :is(.run-copy-action, .run-fork-action, .tl-jump-latest, .run-final-answer__recovery-action):focus-visible {
+  outline: 2px solid var(--tl-accent);
+  outline-offset: 2px;
+}
+
+#codex-overleaf-panel :is(input, textarea)::placeholder {
+  color: var(--tl-fg-3);
+  opacity: 1;
+}
+
+.codex-provider-dialog-root .codex-provider-field :is(input, textarea)::placeholder {
+  color: var(--provider-muted);
+  opacity: 1;
+}
+
+.codex-provider-dialog-root :is(button, input, textarea, select):focus-visible {
+  outline: 2px solid var(--provider-accent);
+  outline-offset: 2px;
 }
 
 /* Active-session bar: the title on the left, rename + delete on the right, so
@@ -3084,13 +3110,13 @@
 }
 
 #codex-overleaf-panel .run-final-answer .run-system-label {
-  color: var(--tl-accent);
+  color: var(--tl-fg-3);
   font-weight: 650;
   letter-spacing: 0.01em;
 }
 
 #codex-overleaf-panel .run-completion-report[data-status="failed"] .run-system-label[data-system-label="conclusion"] {
-  color: var(--tl-fail);
+  color: var(--tl-fg-3);
 }
 
 #codex-overleaf-panel .run-final-answer .run-change-summary {
@@ -3179,9 +3205,8 @@
 }
 
 #codex-overleaf-panel .run-final-answer__meta {
-  margin: 10px 0 0;
-  padding: 8px 0 0;
-  border-top: 1px solid var(--tl-border);
+  margin: 14px 0 0;
+  padding: 0;
   display: grid;
   grid-template-columns: max-content 1fr;
   column-gap: 12px;
@@ -3205,18 +3230,15 @@
 }
 
 #codex-overleaf-panel .run-completion-report[data-status="failed"] {
-  color: var(--tl-fail);
+  color: var(--tl-fg-2);
 }
 
-/* .run-final-answer resets color to fg-1 for normal reports; a failed report's
-   conclusion must keep the alert color or failure reads like success. */
+/* Failure severity belongs to the status header and compact notice. */
 #codex-overleaf-panel .run-completion-report[data-status="failed"] .run-final-answer {
-  color: var(--tl-fail);
+  color: var(--tl-fg-2);
 }
 
-/* Failed-status reports keep their alert color for the conclusion, but the
-   meta block stays muted so it still reads as system info rather than amplifying
-   the alert. */
+/* Keep system metadata subordinate to the answer in both themes. */
 #codex-overleaf-panel .run-completion-report[data-status="failed"] .run-final-answer__meta,
 #codex-overleaf-panel .run-completion-report[data-status="failed"] .run-final-answer__meta-value {
   color: var(--tl-fg-3);
@@ -3250,6 +3272,43 @@
 #codex-overleaf-panel .run-final-answer__recovery-action:disabled {
   cursor: default;
   opacity: 0.6;
+}
+
+#codex-overleaf-panel .run-feedback {
+  display: grid;
+  gap: 5px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--tl-surface-2);
+  color: var(--tl-fg-2);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+#codex-overleaf-panel .run-feedback p { margin: 0; }
+#codex-overleaf-panel .run-feedback__title { color: var(--tl-fail); font-weight: 650; }
+#codex-overleaf-panel .run-feedback[data-tone="warning"] .run-feedback__title { color: var(--tl-review); }
+#codex-overleaf-panel .run-feedback .run-final-answer__recovery-action {
+  justify-self: start;
+  margin: 3px 0 0;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--tl-accent);
+  font-weight: 600;
+}
+
+#codex-overleaf-panel :is(.run-copy-action, .run-fork-action) {
+  color: var(--tl-fg-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #codex-overleaf-panel :is(.tl-jump-latest, .run-copy-action, .run-fork-action, .run-final-answer__recovery-action) {
+    animation: none;
+    transition: none;
+  }
 }
 
 #codex-overleaf-panel .codex-probe-line {

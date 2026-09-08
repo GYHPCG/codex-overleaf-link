@@ -11,6 +11,11 @@
   const OT_PATCH_DEBOUNCE_MS = 500;
   const OT_MAX_PATCH_BATCH = 25;
   const OT_FRESHNESS_MAX_AGE_MS = 30000;
+  const OT_MAX_FILE_BYTES = 1024 * 1024;
+  const OT_MAX_PENDING_EVENTS = 64;
+  const OT_MAX_PENDING_BYTES = 4 * 1024 * 1024;
+  const OT_MAX_BATCH_BYTES = 2 * 1024 * 1024;
+  const encoder = typeof TextEncoder === 'function' ? new TextEncoder() : null;
   const PAUSE_STATES = new Set(['running', 'writing', 'undoing', 'compiling']);
 
   function buildPatchFilesRequest({ projectId, events, nativeCompatibility } = {}) {
@@ -87,7 +92,7 @@
       if (file?.state !== 'fresh') {
         continue;
       }
-      const age = now - Date.parse(file.lastPatchAt || '');
+      const age = now - Date.parse(file.observedAt ?? file.lastPatchAt ?? '');
       if (!Number.isFinite(age) || age < 0 || age > OT_FRESHNESS_MAX_AGE_MS) continue;
       const filePath = normalizePath(file.path);
       if (filePath) {
@@ -104,6 +109,88 @@
       };
     }
     return { ok: false, reason: 'missing_ot_fresh_focus' };
+  }
+
+  function textBytes(value) {
+    const text = String(value || '');
+    return encoder ? encoder.encode(text).byteLength : text.length * 3;
+  }
+
+  function patchBytes(event) { return textBytes(event.nextContent) + textBytes(event.path) + 512; }
+
+  function queuePatchEvents(queue, events, now = Date.now()) {
+    if (!Array.isArray(events) || events.length > OT_MAX_PENDING_EVENTS) return { ok: false, reason: 'ot_queue_limit' };
+    const next = Array.isArray(queue) ? queue.slice() : [];
+    let bytes = next.reduce((sum, event) => sum + patchBytes(event), 0);
+    if (next.length > OT_MAX_PENDING_EVENTS || bytes > OT_MAX_PENDING_BYTES) return { ok: false, reason: 'ot_queue_limit' };
+    for (const input of events) {
+      const path = normalizePath(input?.path);
+      const time = typeof input?.observedAt === 'number' ? input.observedAt : Date.parse(input?.observedAt || '');
+      if (!isSafeRelativePath(path) || path.length > 1024 || typeof input?.nextContent !== 'string' ||
+          typeof input.baseHash !== 'string' || !input.baseHash || input.baseHash.length > 128) {
+        return { ok: false, reason: 'ot_event_invalid' };
+      }
+      if (!Number.isFinite(time) || now - time < 0 || now - time > OT_FRESHNESS_MAX_AGE_MS) return { ok: false, reason: 'ot_event_expired' };
+      if (textBytes(input.nextContent) > OT_MAX_FILE_BYTES) return { ok: false, reason: 'ot_file_limit' };
+      const event = { path, baseHash: input.baseHash, nextContent: input.nextContent,
+        nextHash: typeof input.nextHash === 'string' && input.nextHash.length <= 128 ? input.nextHash : '',
+        observedAt: new Date(time).toISOString() };
+      if (isPrimitiveMetadata(input.observedVersion) && String(input.observedVersion).length <= 128) event.observedVersion = input.observedVersion;
+      const tail = next[next.length - 1];
+      if (tail?.path === path && tail.nextHash && tail.nextHash === event.baseHash) {
+        event.baseHash = tail.baseHash;
+        bytes -= patchBytes(next.pop());
+      }
+      if (event.nextHash !== event.baseHash) { next.push(event); bytes += patchBytes(event); }
+      if (next.length > OT_MAX_PENDING_EVENTS || bytes > OT_MAX_PENDING_BYTES) return { ok: false, reason: 'ot_queue_limit' };
+    }
+    return { ok: true, queue: next, bytes };
+  }
+
+  function takePatchBatch(queue) {
+    let bytes = 0;
+    let count = 0;
+    while (count < Math.min(queue.length, OT_MAX_PATCH_BATCH)) {
+      const size = patchBytes(queue[count]);
+      if (bytes + size > OT_MAX_BATCH_BYTES) break;
+      bytes += size;
+      count += 1;
+    }
+    return queue.splice(0, count);
+  }
+
+  function validatePatchReceipt(events, result = {}, now = Date.now()) {
+    if ((Array.isArray(result.skippedFiles) && result.skippedFiles.length) || Number(result.skippedCount || 0) > 0) {
+      return { ok: false, reason: 'mirror_patch_skipped' };
+    }
+    if (!events.length || Number(result.appliedCount) !== events.length || !Array.isArray(result.appliedFiles) ||
+        result.appliedFiles.length !== events.length || !result.appliedFiles.every((file, index) =>
+          normalizePath(file?.path) === events[index].path && (!events[index].nextHash || file.hash === events[index].nextHash))) {
+      return { ok: false, reason: 'mirror_patch_invalid_result' };
+    }
+    if (events.some(event => { const time = Date.parse(event.observedAt);
+      return !Number.isFinite(time) || time > now || now - time > OT_FRESHNESS_MAX_AGE_MS;
+    })) return { ok: false, reason: 'ot_event_expired' };
+    return { ok: true };
+  }
+
+  function normalizeFailureCode(value, fallback = 'ot_error') {
+    const code = typeof value === 'string' ? value : value?.code;
+    if (/^[a-z][a-z0-9_]{0,79}$/.test(code || '')) return code;
+    if (/page bridge|capability|bridge timed out/i.test(String(code || ''))) return 'ot_bridge_unavailable';
+    return fallback;
+  }
+
+  function getFailureMessageKey(value) {
+    const code = normalizeFailureCode(value);
+    if (/bridge|ot_status|ot_events/.test(code)) return 'otFailureBridge';
+    if (/missing_ot_text|observer_create|observer_unavailable/.test(code)) return 'otFailureObserver';
+    if (code === 'ot_file_limit') return 'otFailureFileLimit';
+    if (code === 'ot_queue_limit') return 'otFailureQueueLimit';
+    if (code === 'ot_event_expired') return 'otFailureExpired';
+    if (/editor|active_path|document/.test(code)) return 'otFailureEditor';
+    if (/mirror|hash|baseline/.test(code)) return 'otFailureMirror';
+    return 'otFailureGeneric';
   }
 
   function normalizePath(value) {
@@ -170,6 +257,15 @@
     OT_PATCH_DEBOUNCE_MS,
     OT_MAX_PATCH_BATCH,
     OT_FRESHNESS_MAX_AGE_MS,
+    OT_MAX_FILE_BYTES,
+    OT_MAX_PENDING_EVENTS,
+    OT_MAX_PENDING_BYTES,
+    OT_MAX_BATCH_BYTES,
+    queuePatchEvents,
+    takePatchBatch,
+    validatePatchReceipt,
+    normalizeFailureCode,
+    getFailureMessageKey,
     buildPatchFilesRequest,
     canUseOtWarmStart,
     normalizePath,

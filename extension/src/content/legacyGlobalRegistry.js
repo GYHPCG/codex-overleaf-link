@@ -57,6 +57,8 @@
     'RunInputQueue',
     'RunQueueScheduler',
     'RunResultActions',
+    'RunScrollLayout',
+    'RunFailureNotice',
     'RunSettlementPersistence',
     'RunTimelineView',
     'ScopedPersistenceCoordinator',

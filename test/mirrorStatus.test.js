@@ -238,6 +238,7 @@ test('patchMirrorFiles applies verified text patch without updating lastFullSync
     state: 'fresh',
     lastFullSyncAt: baselineBefore.lastFullSyncAt,
     lastPatchAt: baselineAfter.lastOtPatchAt,
+    observedAt: baselineAfter.lastOtPatchAt,
     observedVersion: 12
   });
 });

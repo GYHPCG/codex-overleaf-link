@@ -129,29 +129,40 @@
   }
 
   // --- History & storage (v1.7.5): usage summary + clear-all in Settings ---
+  let storageUsageRequestId = 0;
   function refreshStorageUsageSummary() {
     const node = getSettingsPanelInstance()?.container?.querySelector('[data-storage-usage]');
     if (!node) {
       return;
     }
-    const sessionCount = Array.isArray(getState()?.sessions) ? getState().sessions.length : 0;
-    const runCount = Array.isArray(getState()?.runs) ? getState().runs.length : 0;
+    const requestId = ++storageUsageRequestId;
+    const projectId = getCurrentProjectId?.();
+    const isCurrent = () => requestId === storageUsageRequestId && projectId === getCurrentProjectId?.()
+      && getSettingsPanelInstance()?.container?.querySelector('[data-storage-usage]') === node;
+    const current = getState();
+    const sessionCount = Array.isArray(current?.sessions) ? current.sessions.length : 0;
+    const runCount = Array.isArray(current?.runs) ? current.runs.length : 0;
     const counts = tx(
-      `${sessionCount} session(s) · ${runCount} recent run(s) kept`,
-      `${sessionCount} 个会话 · 保留最近 ${runCount} 轮运行`
+      `${sessionCount} loaded session(s) in this project · ${runCount} run(s) in the active session`,
+      `当前项目已加载 ${sessionCount} 个会话 · 当前会话 ${runCount} 轮运行`
     );
+    // Dynamic text belongs to this renderer, not the loading-label translator.
+    node.removeAttribute?.('data-i18n');
     node.textContent = counts;
-    const estimate = navigator.storage?.estimate?.();
-    if (estimate?.then) {
-      estimate.then(info => {
-        const usage = Number(info?.usage);
-        if (Number.isFinite(usage) && usage >= 0) {
-          const mb = usage / (1024 * 1024);
-          const size = mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(usage / 1024))} KB`;
-          node.textContent = tx(`${counts} · ~${size} used on this site`, `${counts} · 本站点约占用 ${size}`);
-        }
-      }).catch(() => { /* estimate unsupported — counts alone are fine */ });
-    }
+    const unavailable = () => {
+      if (isCurrent()) node.textContent = tx(`${counts} · Site storage estimate unavailable`, `${counts} · 本站点容量暂无法估算`);
+    };
+    let timer;
+    const estimate = Promise.resolve().then(() => navigator.storage?.estimate?.());
+    const deadline = new Promise(resolve => { timer = setTimeout(() => resolve(null), 2000); });
+    return Promise.race([estimate, deadline]).then(info => {
+      if (!isCurrent()) return;
+      const usage = info?.usage;
+      if (!Number.isFinite(usage) || usage < 0) { unavailable(); return; }
+      const mb = usage / (1024 * 1024);
+      const size = usage === 0 ? '0 KB' : mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(usage / 1024))} KB`;
+      node.textContent = tx(`${counts} · Site total ~${size}`, `${counts} · 本站点总占用约 ${size}`);
+    }).catch(unavailable).finally(() => clearTimeout(timer));
   }
 
   async function clearAllHistoryWithConfirm() {

@@ -38,7 +38,7 @@
             <small data-i18n="diagnosticsSnapshotSubtitle">Full project, assets, read source</small>
           </button>
           <button type="button" data-diagnostics-ot>
-            <span data-i18n="diagnosticsOtTitle">Check Experimental OT Mirror</span>
+            <span data-i18n="diagnosticsOtTitle">Check OT Mirror</span>
             <small data-i18n="diagnosticsOtSubtitle">Status, fresh files, fallback</small>
           </button>
           <button type="button" data-diagnostics-export>

@@ -2,6 +2,9 @@
   if (typeof module === 'object' && module.exports) {
     module.exports = factory(root);
   } else {
+    if (typeof root.CodexOverleafRealtimeObserver?.dispose === 'function') {
+      root.CodexOverleafRealtimeObserver.dispose();
+    }
     root.CodexOverleafRealtimeObserver = factory(root);
   }
 })(typeof globalThis !== 'undefined' ? globalThis : window, function overleafRealtimeObserverFactory(root) {
@@ -12,8 +15,34 @@
   const BASELINE_REFRESH_EVENT_TYPES = ['click', 'focusin', 'change'];
   const CHANNEL_KEY_PATTERN = /socket|websocket|channel|realtime|collab|share|ot|doc|editor|connection|event|broadcast|presence/i;
   const SENSITIVE_KEY_PATTERN = /^(content|previousContent|nextContent|text|body|raw|rawContent|source|sourceText)$/i;
+  const LIMITS = Object.freeze({ maxFileBytes: 1024 * 1024, maxEvents: 64, maxQueuedBytes: 4 * 1024 * 1024 });
+  const encoder = typeof TextEncoder === 'function' ? new TextEncoder() : null;
+  const ownedObservers = new WeakMap();
 
   function create(deps = {}) {
+    const documentRef = Object.prototype.hasOwnProperty.call(deps, 'document')
+      ? deps.document
+      : getDefaultDocument();
+    dispose(documentRef);
+    const observer = createObserver(deps);
+    if (documentRef && ['object', 'function'].includes(typeof documentRef)) {
+      ownedObservers.set(documentRef, observer);
+    }
+    return observer;
+  }
+
+  function dispose(documentRef = getDefaultDocument()) {
+    if (!documentRef || !['object', 'function'].includes(typeof documentRef)) return;
+    const previous = ownedObservers.get(documentRef);
+    if (!previous) return;
+    try {
+      previous.stop();
+    } finally {
+      ownedObservers.delete(documentRef);
+    }
+  }
+
+  function createObserver(deps = {}) {
     const pageWindow = deps.window || getDefaultWindow();
     const pageDocument = Object.prototype.hasOwnProperty.call(deps, 'document')
       ? deps.document
@@ -21,6 +50,9 @@
     const events = [];
     let activePath = '';
     let lastContent = '';
+    let baselineByteCount = 0;
+    let queuedTextBytes = 0;
+    let coalescedEventCount = 0;
     let running = false;
     let listenersAttached = false;
     let statusName = 'off';
@@ -31,6 +63,7 @@
 
     function start(_params = {}) {
       clearQueuedEvents();
+      coalescedEventCount = 0;
       channelCandidates = collectChannelCandidates(pageWindow);
       if (!canAttachDocumentListeners()) {
         running = false;
@@ -40,13 +73,15 @@
 
       running = true;
       refreshActiveBaseline();
-      attachDocumentListeners();
+      if (running) attachDocumentListeners();
       return getStatus();
     }
 
     function stop() {
       detachDocumentListeners();
       clearQueuedEvents();
+      lastContent = '';
+      baselineByteCount = 0;
       running = false;
       statusName = 'off';
       statusReason = '';
@@ -61,6 +96,9 @@
         strategy: STRATEGY_ACTIVE_EDITOR,
         activePath,
         queuedEventCount: events.length,
+        queuedTextBytes,
+        baselineByteCount,
+        coalescedEventCount,
         lastEventAt,
         lastErrorCode,
         channelCandidates: cloneChannelCandidates(channelCandidates)
@@ -72,13 +110,60 @@
     }
 
     function drainEvents() {
+      // Capture-phase input can precede the editor transaction; paste, undo
+      // and collaboration updates may dispatch no DOM input at all. The
+      // existing bounded poll samples committed text before draining.
+      if (running) handleEditorInput();
       const drained = events.slice();
       clearQueuedEvents();
-      return drained;
+      if (!drained.length) return [];
+      const otText = resolveOtText(deps, pageWindow, root);
+      if (typeof otText?.normalizeObservedTextEvent !== 'function') {
+        stopObservation('missing_ot_text');
+        return [];
+      }
+      const normalized = [];
+      for (const pending of drained) {
+        let event;
+        const { previousBytes, nextBytes, ...input } = pending;
+        try { event = otText.normalizeObservedTextEvent(input); } catch (_error) { /* fail closed below */ }
+        if (!event || event.ok !== true) {
+          stopObservation(event?.reason || 'normalize_observed_text_event_failed');
+          return [];
+        }
+        normalized.push(sanitizeObservedEvent(event));
+      }
+      return normalized;
     }
 
     function clearQueuedEvents() {
       events.length = 0;
+      queuedTextBytes = 0;
+    }
+
+    function stopObservation(reason) {
+      stop();
+      markUnavailable(reason);
+    }
+
+    function queueObservedChange(event, previousBytes, nextBytes) {
+      const tail = events[events.length - 1];
+      const merge = tail?.path === event.path && tail.nextContent === event.previousContent;
+      const pending = { ...event, previousContent: merge ? tail.previousContent : event.previousContent,
+        previousBytes: merge ? tail.previousBytes : previousBytes, nextBytes };
+      const remainingBytes = queuedTextBytes - (merge ? tail.previousBytes + tail.nextBytes : 0);
+      const noChange = pending.previousContent === pending.nextContent;
+      const nextLength = events.length - (merge ? 1 : 0) + (noChange ? 0 : 1);
+      const nextTotal = remainingBytes + (noChange ? 0 : pending.previousBytes + pending.nextBytes);
+      if (nextLength > LIMITS.maxEvents || nextTotal > LIMITS.maxQueuedBytes) {
+        stopObservation('ot_queue_limit');
+        return false;
+      }
+      if (merge) { events.pop(); coalescedEventCount += 1; }
+      if (!noChange) events.push(pending);
+      queuedTextBytes = nextTotal;
+      lastEventAt = event.observedAt;
+      return true;
     }
 
     function canAttachDocumentListeners() {
@@ -118,12 +203,14 @@
 
       const textResult = readEditorText();
       if (!textResult.ok) {
-        markUnavailable(textResult.reason);
+        if (textResult.reason === 'ot_file_limit') stopObservation(textResult.reason);
+        else markUnavailable(textResult.reason);
         return false;
       }
 
       activePath = pathResult.path;
       lastContent = textResult.text;
+      baselineByteCount = textResult.bytes;
       markObserving();
       return true;
     }
@@ -144,16 +231,19 @@
 
       const textResult = readEditorText();
       if (!textResult.ok) {
-        markUnavailable(textResult.reason);
+        if (textResult.reason === 'ot_file_limit') stopObservation(textResult.reason);
+        else markUnavailable(textResult.reason);
         return;
       }
 
       activePath = pathResult.path;
       lastContent = textResult.text;
+      baselineByteCount = textResult.bytes;
       markObserving();
     }
 
-    function handleEditorInput() {
+    function handleEditorInput(inputEvent) {
+      if (inputEvent?.target?.closest?.('#codex-overleaf-panel')) return;
       if (!running) {
         return;
       }
@@ -166,7 +256,8 @@
 
       const textResult = readEditorText();
       if (!textResult.ok) {
-        markUnavailable(textResult.reason);
+        if (textResult.reason === 'ot_file_limit') stopObservation(textResult.reason);
+        else markUnavailable(textResult.reason);
         return;
       }
 
@@ -175,6 +266,7 @@
         // Fallback for file switches that were not preceded by a selection/focus event.
         activePath = pathResult.path;
         lastContent = nextContent;
+        baselineByteCount = textResult.bytes;
         markObserving();
         return;
       }
@@ -185,34 +277,25 @@
       }
 
       const observedAt = resolveObservedAt();
-      const otText = resolveOtText(deps, pageWindow, root);
-      if (!otText || typeof otText.normalizeObservedTextEvent !== 'function') {
-        markUnavailable('missing_ot_text');
-        return;
-      }
-
-      const event = otText.normalizeObservedTextEvent({
+      const queued = queueObservedChange({
         path: activePath,
         previousContent: lastContent,
         nextContent,
         observedAt,
         source: STRATEGY_ACTIVE_EDITOR
-      });
-      if (event && event.ok === true) {
-        const queuedEvent = sanitizeObservedEvent(event);
-        events.push(queuedEvent);
-        lastEventAt = queuedEvent.observedAt || observedAt;
+      }, baselineByteCount, textResult.bytes);
+      if (queued) {
+        lastContent = nextContent;
+        baselineByteCount = textResult.bytes;
         markObserving();
-      } else {
-        lastErrorCode = event?.reason || 'normalize_observed_text_event_failed';
       }
-      lastContent = nextContent;
     }
 
     function handleActivePathUnavailable(reason) {
       if (reason === 'missing_active_path') {
         activePath = '';
         lastContent = '';
+        baselineByteCount = 0;
       }
       markUnavailable(reason);
     }
@@ -256,9 +339,13 @@
         if (typeof text !== 'string') {
           return { ok: false, reason: 'missing_editor_content' };
         }
+        const bytes = text.length > LIMITS.maxFileBytes ? LIMITS.maxFileBytes + 1
+          : encoder ? encoder.encode(text).byteLength : text.length * 3;
+        if (bytes > LIMITS.maxFileBytes) return { ok: false, reason: 'ot_file_limit' };
         return {
           ok: true,
-          text
+          text,
+          bytes
         };
       } catch (_error) {
         return {
@@ -448,7 +535,6 @@
 
   function normalizePath(value) {
     return String(value || '')
-      .replace(/\s+/g, ' ')
       .replace(/\\/g, '/')
       .trim()
       .replace(/^\/+/, '');
@@ -489,7 +575,9 @@
   }
 
   return {
+    LIMITS,
     collectChannelCandidates,
-    create
+    create,
+    dispose
   };
 });

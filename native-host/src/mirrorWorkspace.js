@@ -712,6 +712,22 @@ function getMirrorStatus(projectId, options = {}) {
   };
 }
 
+function normalizeObservedPatchTime(value, fallback) {
+  const candidate = value == null ? fallback : value;
+  const timestamp = typeof candidate === 'number'
+    ? candidate
+    : typeof candidate === 'string' ? Date.parse(candidate) : NaN;
+  return Number.isFinite(timestamp) && Math.abs(timestamp) <= 8640000000000000
+    ? new Date(timestamp).toISOString()
+    : '';
+}
+
+function isFreshOtObservation(freshness) {
+  const timestamp = Date.parse(freshness?.observedAt ?? freshness?.lastPatchAt ?? '');
+  const ageMs = Date.now() - timestamp;
+  return Number.isFinite(timestamp) && ageMs >= 0 && ageMs <= 30000;
+}
+
 function buildOtStatusFields(baseline = {}, trusted) {
   const metadata = {
     lastOtPatchAt: baseline.lastOtPatchAt || '',
@@ -727,13 +743,15 @@ function buildOtStatusFields(baseline = {}, trusted) {
   }
   const textFiles = (baseline.files || []).filter(file => file?.kind === 'text');
   const freshFiles = textFiles
-    .filter(file => file.freshness?.source === 'ot' && file.freshness?.state === 'fresh')
+    .filter(file => file.freshness?.source === 'ot' && file.freshness?.state === 'fresh'
+      && isFreshOtObservation(file.freshness))
     .map(file => ({
       path: file.path,
       source: file.freshness.source,
       state: file.freshness.state,
       lastFullSyncAt: file.freshness.lastFullSyncAt || '',
       lastPatchAt: file.freshness.lastPatchAt || '',
+      observedAt: file.freshness.observedAt ?? file.freshness.lastPatchAt ?? '',
       observedVersion: file.freshness.observedVersion ?? null
     }))
     .sort((left, right) => left.path.localeCompare(right.path));
@@ -935,6 +953,7 @@ async function patchMirrorFiles({ projectId, files, rootDir, source = 'ot' }) {
         state: 'fresh',
         lastFullSyncAt: baseline.lastFullSyncAt || '',
         lastPatchAt: patchBatchAt,
+        observedAt: normalizeObservedPatchTime(patch.observedAt, patchBatchAt),
         observedVersion: patch.observedVersion ?? null
       }
     };

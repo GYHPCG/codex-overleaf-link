@@ -14,6 +14,8 @@
     const {
       RunGuidanceView,
       RunResultActions,
+      RunScrollLayout,
+      RunFailureNotice,
       tr,
       tx,
       getLocale,
@@ -48,6 +50,7 @@
 
   let logAutoFollow = true;
   let userScrollIntentUntil = 0;
+  let userScrollExtent = '';
   // Scroll engine: a single rAF coalesces a burst of scroll requests into one
   // write per frame (streaming can fire ~25/sec); `scrollLogPendingForce`
   // survives that coalesce so a forced scroll is never lost. `unreadSinceDetach`
@@ -60,6 +63,12 @@
   // reads a static "Processing…" and the user can't tell a working run from a
   // hung one — the single highest-value streaming signal per competitor UX.
   let runElapsedTimer = null;
+  const scrollLayout = RunScrollLayout?.create({
+    getScroller: getLogScrollContainer,
+    isFollowing: () => logAutoFollow,
+    onLayoutChange: scroller => logAutoFollow ? scrollLogToBottom() : updateJumpToLatestButton(scroller)
+  });
+  const failureNotice = RunFailureNotice?.create({ tr, projectRunSettlement, sanitizeText: sanitizeAssistantVisibleText });
 
   // Re-arm auto-follow (called by the runtime when a new run starts, so the
   // log snaps back to following the live stream).
@@ -70,6 +79,7 @@
 
   function bindLogAutoFollow() {
     const scroller = getLogScrollContainer();
+    scrollLayout?.bind(scroller);
     if (!scroller || scroller.dataset.autoFollowBound === 'true') {
       return;
     }
@@ -79,15 +89,14 @@
     scroller.addEventListener('pointerdown', markUserScrollIntent, { passive: true });
     scroller.addEventListener('keydown', event => {
       if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
-        markUserScrollIntent();
+        markUserScrollIntent(event);
       }
     });
     scroller.addEventListener('scroll', () => {
-      if (Date.now() <= userScrollIntentUntil) {
+      if (Date.now() <= userScrollIntentUntil && userScrollExtent === `${scroller.scrollHeight}:${scroller.clientHeight}`) {
         logAutoFollow = isLogNearBottom(scroller);
-      } else if (isLogNearBottom(scroller)) {
-        logAutoFollow = true;
       }
+      scrollLayout?.captureAnchor();
       // Reveal / hide the floating "jump to latest" button the instant the
       // user detaches from or re-reaches the bottom.
       updateJumpToLatestButton(scroller);
@@ -125,6 +134,7 @@
     if (!el) {
       return;
     }
+    if (el.dataset) el.dataset.logAutoFollow = logAutoFollow ? 'true' : 'false';
     const button = ensureJumpToLatestButton();
     if (!button) {
       return;
@@ -157,8 +167,16 @@
     return getPanel()?.querySelector('[data-log]') || getPanel()?.querySelector('[data-main]');
   }
 
-  function markUserScrollIntent() {
+  function markUserScrollIntent(event) {
+    const scroller = getLogScrollContainer();
+    if (!scroller || (event?.type === 'pointerdown' && event.target !== scroller)) return;
+    if (event?.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
     userScrollIntentUntil = Date.now() + 1200;
+    userScrollExtent = `${scroller.scrollHeight}:${scroller.clientHeight}`;
+    if ((event?.type === 'wheel' && event.deltaY < 0) || ['ArrowUp', 'PageUp', 'Home'].includes(event?.key)) {
+      logAutoFollow = false;
+      scrollLogPendingForce = false;
+    }
   }
 
   function isLogNearBottom(log) {
@@ -181,7 +199,7 @@
       userScrollIntentUntil = 0;
       unreadSinceDetach = 0;
       scrollLogPendingForce = true;
-    } else if (!(logAutoFollow || isLogNearBottom(scroller))) {
+    } else if (!logAutoFollow) {
       // The user has scrolled up: do not yank them. Just keep the jump button
       // state current.
       updateJumpToLatestButton(scroller);
@@ -195,7 +213,7 @@
       }
       // Re-check intent AT PAINT TIME: a user who flicked up between schedule
       // and paint must not be snapped back down (closes the one-frame fight).
-      if (scrollLogPendingForce || logAutoFollow || isLogNearBottom(el)) {
+      if (scrollLogPendingForce || logAutoFollow) {
         setLogScrollPosition(el);
       }
       scrollLogPendingForce = false;
@@ -284,11 +302,13 @@
     }
     return tr('processed', { elapsed });
   }
-  function renderRunHistory() {
+  function renderRunHistory(options = {}) {
     const log = getPanel()?.querySelector('[data-log]');
     if (!log) {
       return;
     }
+    const reading = options.preserveScroll === true && !logAutoFollow
+      ? scrollLayout?.snapshot() || { scrollTop: log.scrollTop } : null;
     log.replaceChildren();
     if (!getState().runs?.length) {
       const empty = document.createElement('div');
@@ -317,7 +337,8 @@
     for (const run of runs) {
       log.append(renderRunCard(run));
     }
-    scrollLogToBottom({ force: true });
+    if (reading) { log.scrollTop = reading.scrollTop; scrollLayout?.restore(reading); updateJumpToLatestButton(log); }
+    else scrollLogToBottom({ force: true });
   }
 
   function renderRunCard(run) {
@@ -637,7 +658,7 @@
       if (row.key) dt.dataset.metaKey = row.key;
       const dd = document.createElement('dd');
       dd.className = 'run-final-answer__meta-value';
-      dd.textContent = row.value;
+      dd.textContent = failureNotice?.formatMetaValue(report, row) ?? row.value;
       metaBlock.append(dt, dd);
     }
     if (metaBlock.children.length) {
@@ -714,6 +735,7 @@
         report.append(main);
       }
 
+      failureNotice?.append(report, event, run);
       appendCompletionMetaBlock(report, structured.meta);
       appendCompileFix(report);
       appendRejectedRedo(report);
@@ -735,6 +757,7 @@
     report.append(body);
     appendCompileFix(report);
     appendRejectedRedo(report);
+    failureNotice?.append(report, event, run);
     appendCompletionMetaBlock(report, split.meta);
     appendRecoveryActionForFailure(report, event, run);
     return report;
@@ -793,6 +816,9 @@
   }
 
   function appendRecoveryActionForFailure(report, event, run) {
+    const recovery = failureNotice?.prepareRecovery(report, { openFile: openProjectFileForFailure });
+    if (recovery?.handled) return;
+    report = recovery?.target || report;
     const failureCode = event?.failure?.code || '';
     if (RETRYABLE_FAILURE_CODES.has(failureCode) && typeof refillComposerForRetry === 'function') {
       const retry = buildRecoveryButton(failureCode,

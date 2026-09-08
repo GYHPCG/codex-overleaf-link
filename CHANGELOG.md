@@ -1,17 +1,30 @@
 # Changelog
 
-## v2.3.6 - 2026-09-07
+## v2.3.6 - 2026-09-08
 
 ### Changed
 
 - Share bounded, retryable release downloads between the real updater and update-hop rehearsals, including full-body deadlines, incremental size limits, proxy configuration and actionable network errors.
 - Distinguish installed files from running Extension and Native Host versions, with safe-point reload guidance and recovery of obsolete failure notices after a verified manual reinstall.
+- Promote OT Mirror into Project cache settings without an experimental label, preserving its project-level opt-in, read-only behavior, freshness checks and normal-read fallback.
+- Move Preload project context into a dedicated Context loading group instead of Software updates, without changing its saved preference or scope.
+- Generate clearer automatic session titles by removing prompt syntax and polite prefixes, preserving manual and fork titles, and keeping meaningful titles when a follow-up is only a generic continuation.
+- Show compact, actionable failure feedback and explicit unconfirmed-write guidance; improve secondary-text contrast, keyboard focus and reduced-motion support without adding extra report separators.
 
 ### Fixed
 
 - Keep bootstrap rechecks bound to the existing signed update authorization instead of requiring another latest-release network request after consent.
-- Restore experimental OT warm-mirror startup from serialized page responses, reject unavailable editor content, expire old per-file freshness and verify current focus overlays before reuse.
+- Restore OT warm-mirror startup from serialized page responses, reject unavailable editor content, expire old per-file freshness and verify current focus overlays before reuse.
 - Keep late OT patch responses scoped to their original project so navigation cannot corrupt the next project's observation status.
+- Coalesce and bound OT event buffers, capture committed editor changes during polling, validate complete patch receipts and retain sanitized failure details without extending old observation timestamps.
+- Keep the OT checkbox and saved state aligned after native browser click cancellation, including confirmation and project-navigation races.
+- Preserve detached reading positions through task-completion history repaint and layout changes while retaining explicit jump-to-latest and session-switch positioning.
+- Refresh dynamic composer, provider, skill and storage summaries when the interface language changes, without rewriting historical conversation text.
+- Resolve History & storage summaries through the public settings container, show loaded counts immediately and bound the optional browser storage estimate with an explicit fallback.
+
+### Testing
+
+- Add a real-Chrome regression fixture for checkbox default-action timing, terminal history repaint and session-switch positioning, complementing the controller and example-project checks.
 
 ## v2.3.5 - 2026-09-06
 

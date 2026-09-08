@@ -203,7 +203,7 @@ test('creates a fresh session with empty history', () => {
   assert.equal(session.titleSource, 'auto');
 });
 
-test('derives compact auto titles from the first task without context tokens', () => {
+test('derives compact auto titles without polite prefixes or context tokens', () => {
   const state = normalizePanelState({
     activeSessionId: 'session_a',
     sessions: [{
@@ -220,7 +220,8 @@ test('derives compact auto titles from the first task without context tokens', (
     titleSource: 'auto'
   });
 
-  assert.equal(updated.sessions[0].title, '帮我检查一下语法问题并直接修复这篇论文中的明显…');
+  assert.equal(updated.sessions[0].title, '检查一下语法问题并直接修复这篇论文中的明显错误…');
+  assert.doesNotMatch(updated.sessions[0].title, /^帮我|@context|@file:/);
   assert.equal(updated.sessions[0].titleSource, 'auto');
 });
 

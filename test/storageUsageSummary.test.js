@@ -1,0 +1,160 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const settingsSource = fs.readFileSync(path.join(__dirname, '../extension/src/content/settingsPanel.js'), 'utf8');
+const maintenanceSource = fs.readFileSync(path.join(__dirname, '../extension/src/content/panelMaintenance.js'), 'utf8');
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+function element(attributes = {}) {
+  const listeners = new Map();
+  return {
+    textContent: 'Calculating usage...', dataset: {}, open: false,
+    getAttribute: key => Object.hasOwn(attributes, key) ? attributes[key] : null,
+    removeAttribute: key => { delete attributes[key]; },
+    addEventListener(type, handler) {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(handler);
+    },
+    emit(type) { for (const handler of listeners.get(type) || []) handler({ target: this }); },
+    closest: () => null
+  };
+}
+
+function fixture(estimate) {
+  let locale = 'en';
+  let projectId = 'project-a';
+  let sequence = 0;
+  let estimateCalls = 0;
+  let maintenance;
+  let current;
+  const timers = new Map();
+  const context = vm.createContext({
+    window: {},
+    navigator: { storage: estimate ? { estimate() { estimateCalls++; return estimate(); } } : undefined },
+    setTimeout(callback, delay) { const id = ++sequence; timers.set(id, { callback, delay }); return id; },
+    clearTimeout(id) { timers.delete(id); }
+  });
+  vm.runInContext(settingsSource, context);
+  vm.runInContext(maintenanceSource, context);
+  function makePanel() {
+    const usage = element({ 'data-i18n': 'storageUsageLoading' });
+    const card = element();
+    card.dataset.setGroup = 'storage';
+    const language = element();
+    language.value = 'en';
+    const nodes = { '[data-storage-usage]': usage, '[data-storage-card]': card, '[data-language-select]': language };
+    const container = {
+      innerHTML: '', querySelector: selector => nodes[selector] || null,
+      querySelectorAll: selector => selector === 'details[data-set-group]' ? [card] : []
+    };
+    const settings = context.window.CodexOverleafSettingsPanel.create({ container, callbacks: {
+      onStorageOpen: () => maintenance.refreshStorageUsageSummary(),
+      onInputChange: event => { locale = event.target.value; }
+    } });
+    return { settings, container, usage, card, language };
+  }
+  current = makePanel();
+  maintenance = context.window.CodexOverleafPanelMaintenance.create({
+    tx: (en, zh) => locale === 'zh' ? zh : en,
+    getCurrentProjectId: () => projectId,
+    getSettingsPanelInstance: () => current.settings,
+    getState: () => ({ sessions: [{ id: 'session-a' }, { id: 'session-b' }], runs: [{ id: 'run-a' }] })
+  });
+  return {
+    ...current, maintenance, timers,
+    estimateCalls: () => estimateCalls,
+    setProject: value => { projectId = value; },
+    replacePanel: () => { current = makePanel(); return current; },
+    expire() {
+      for (const [id, timer] of [...timers]) { timers.delete(id); timer.callback(); }
+    }
+  };
+}
+
+test('real SettingsPanel public handle exposes the container needed by storage statistics', async () => {
+  const f = fixture(() => ({ usage: 2048 }));
+  assert.equal(f.settings.container, f.container);
+  const request = f.maintenance.refreshStorageUsageSummary();
+  assert.match(f.usage.textContent, /2 loaded session/);
+  assert.match(f.usage.textContent, /1 run\(s\) in the active session/);
+  assert.equal(f.usage.getAttribute('data-i18n'), null);
+  await request;
+  assert.match(f.usage.textContent, /Site total ~2 KB/);
+  assert.equal(f.estimateCalls(), 1);
+  assert.equal(f.timers.size, 0);
+});
+
+test('expanding the storage card triggers statistics without clearing history', async () => {
+  const f = fixture(() => ({ usage: 0 }));
+  f.card.open = true;
+  f.card.emit('toggle');
+  await settle();
+  assert.match(f.usage.textContent, /Site total ~0 KB/);
+  assert.equal(f.estimateCalls(), 1);
+  f.card.open = false;
+  f.card.emit('toggle');
+  assert.equal(f.estimateCalls(), 1);
+});
+
+test('a never-resolving capacity request displays counts immediately and has a bounded fallback', async () => {
+  const f = fixture(() => new Promise(() => {}));
+  const request = f.maintenance.refreshStorageUsageSummary();
+  assert.match(f.usage.textContent, /2 loaded session/);
+  assert.equal([...f.timers.values()][0].delay, 2000);
+  f.expire();
+  await request;
+  assert.match(f.usage.textContent, /Site storage estimate unavailable/);
+  assert.equal(f.timers.size, 0);
+});
+
+test('unsupported, rejected, throwing, and invalid estimates preserve usable counts', async () => {
+  for (const estimate of [undefined, () => { throw new Error('blocked'); },
+    () => Promise.reject(new Error('rejected')), () => ({ usage: null }), () => ({ usage: -1 })]) {
+    const f = fixture(estimate);
+    await f.maintenance.refreshStorageUsageSummary();
+    assert.match(f.usage.textContent, /2 loaded session/);
+    assert.match(f.usage.textContent, /estimate unavailable/);
+    assert.equal(f.timers.size, 0);
+  }
+});
+
+test('an older response cannot overwrite a newer summary', async () => {
+  let resolveOld;
+  let calls = 0;
+  const f = fixture(() => ++calls === 1 ? new Promise(resolve => { resolveOld = resolve; }) : { usage: 2048 });
+  const old = f.maintenance.refreshStorageUsageSummary();
+  await settle();
+  await f.maintenance.refreshStorageUsageSummary();
+  resolveOld({ usage: 999 * 1024 * 1024 });
+  await old;
+  assert.match(f.usage.textContent, /Site total ~2 KB/);
+});
+
+test('late responses are ignored after a project or settings-container change', async () => {
+  for (const change of ['project', 'container']) {
+    let resolveOld;
+    const f = fixture(() => new Promise(resolve => { resolveOld = resolve; }));
+    const request = f.maintenance.refreshStorageUsageSummary();
+    const initial = f.usage.textContent;
+    await settle();
+    if (change === 'project') f.setProject('project-b');
+    else f.replacePanel();
+    resolveOld({ usage: 999 * 1024 * 1024 });
+    await request;
+    assert.equal(f.usage.textContent, initial);
+  }
+});
+
+test('an open storage card refreshes its dynamic summary after a language change', async () => {
+  const f = fixture(() => ({ usage: 2048 }));
+  f.card.open = true;
+  f.language.value = 'zh';
+  f.language.emit('change');
+  await settle();
+  assert.match(f.usage.textContent, /\u5f53\u524d\u9879\u76ee/);
+  assert.match(f.usage.textContent, /2 KB/);
+  assert.equal(f.usage.getAttribute('data-i18n'), null);
+});

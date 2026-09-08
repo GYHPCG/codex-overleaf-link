@@ -279,7 +279,6 @@
 
   function normalizePath(value) {
     return String(value || '')
-      .replace(/\s+/g, ' ')
       .replace(/\\/g, '/')
       .trim()
       .replace(/^\/+/, '');

@@ -64,7 +64,7 @@ test('Run all diagnostics aggregates every check into one report', () => {
   assert.match(diag, /if \(Array\.isArray\(result\.checks\)/);
 });
 
-test('experimental OT toggle and language selector relocated from the menu to Settings', () => {
+test('OT mirror and language controls live in Settings with stable control keys', () => {
   const diag = repo('extension/src/content/diagnosticsPanel.js');
   const settings = repo('extension/src/content/settingsPanel.js');
 
@@ -73,9 +73,10 @@ test('experimental OT toggle and language selector relocated from the menu to Se
   assert.doesNotMatch(diag, /data-experimental-ot\b/);
   // Relocated into Settings and wired.
   assert.match(settings, /data-experimental-ot\b/);
-  assert.match(settings, /data-experimental-ot\b/);
+  assert.match(settings, /data-set-group="experimental"/);
   assert.match(settings, /data-language-select/);
-  assert.match(settings, /data-i18n="experimentalTitle"/);
+  assert.match(settings, /data-i18n="otSettingsTitle"/);
+  assert.doesNotMatch(settings, /data-i18n="experimentalTitle"/);
   assert.match(settings, /onOtToggleClick/);
 });
 
@@ -85,7 +86,7 @@ test('diagnostics health i18n is available in English and Chinese', () => {
     'diagnosticsRunAllTitle', 'diagnosticsHealthTitle', 'diagnosticsRunningAll',
     'diagnosticsHealthOk', 'diagnosticsHealthWarn', 'diagnosticsHealthFail',
     'diagnosticsNativeShort', 'diagnosticsPageShort', 'diagnosticsSnapshotShort',
-    'diagnosticsOtShort', 'experimentalTitle', 'languageLabel', 'languageHelp'
+    'diagnosticsOtShort', 'otSettingsTitle', 'languageLabel', 'languageHelp'
   ]) {
     assert.notEqual(I18n.t('en', key), key, `missing English ${key}`);
     assert.notEqual(I18n.t('zh', key), key, `missing Chinese ${key}`);

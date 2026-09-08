@@ -95,18 +95,18 @@
           </details>
           <details class="codex-set-group" data-set-group="experimental">
             <summary class="codex-set-group-head">
-              <span class="codex-set-group-title">${codexSetIcon('flask')}<span data-i18n="experimentalTitle">Experimental</span></span>
+              <span class="codex-set-group-title">${codexSetIcon('database')}<span data-i18n="otSettingsTitle">Project cache</span></span>
               <span class="codex-set-saved" data-set-saved hidden>✓ <span data-i18n="settingsSaved">Saved</span></span>
             </summary>
             <div class="codex-set-card">
               <label class="codex-project-settings-row codex-project-settings-row--switch">
                 <span class="codex-project-settings-row-label">
-                  <span data-i18n="experimentalOtMenuTitle">Experimental OT Mirror</span>
-                  <small class="codex-set-row-sub" data-i18n="experimentalOtMenuSubtitle">Experimental — speeds up reading the file you are editing; Codex falls back to normal reading whenever unsure.</small>
+                  <span data-i18n="experimentalOtMenuTitle">OT Mirror</span>
+                  <small class="codex-set-row-sub" data-i18n="experimentalOtMenuSubtitle">Warms recent edits to the active text file locally. File scope and freshness are checked before reuse.</small>
                 </span>
                 <input type="checkbox" class="codex-switch" data-experimental-ot>
               </label>
-              <p class="codex-set-row-help" data-experimental-ot-menu-status></p>
+              <p class="codex-set-row-help" data-experimental-ot-menu-status aria-live="polite"></p>
             </div>
           </details>
         </div>
@@ -159,17 +159,25 @@
               <button type="button" class="codex-set-btn" data-provider-settings-open data-i18n="providerSettingsConfigure">Configure</button>
             </div>
           </details>
+          <details class="codex-set-group" data-set-group="context-loading" open>
+            <summary class="codex-set-group-head">
+              <span class="codex-set-group-title">${codexSetIcon('database')}<span data-i18n="contextLoadingTitle">Context loading</span></span>
+              <span class="codex-set-saved" data-set-saved hidden>✓ <span data-i18n="settingsSaved">Saved</span></span>
+            </summary>
+            <div class="codex-set-card">
+              <label class="codex-project-settings-row codex-project-settings-row--switch">
+                <span class="codex-project-settings-row-label" data-i18n="preloadProjectContextTitle">Preload project context</span>
+                <input type="checkbox" class="codex-switch" data-preload-project-context>
+              </label>
+              <p class="codex-set-row-help" data-i18n="preloadProjectContextDescription">Fetch the exact project file list in the background after an Overleaf project becomes idle.</p>
+            </div>
+          </details>
           <details class="codex-set-group" data-set-group="updates" open>
             <summary class="codex-set-group-head">
               <span class="codex-set-group-title">${codexSetIcon('software')}<span data-i18n="softwareUpdatesTitle">Software updates</span></span>
             </summary>
             <div class="codex-set-card" data-update-settings>
               <div class="codex-set-row">
-                <label class="codex-project-settings-row codex-project-settings-row--switch">
-                  <span class="codex-project-settings-row-label" data-i18n="preloadProjectContextTitle">Preload project context</span>
-                  <input type="checkbox" class="codex-switch" data-preload-project-context>
-                </label>
-                <p class="codex-set-row-help" data-i18n="preloadProjectContextDescription">Fetch the exact project file list in the background after an Overleaf project becomes idle.</p>
                 <p class="codex-set-row-help" data-update-settings-summary data-i18n="softwareUpdatesHelp">Automatically checks signed stable releases for the Extension and Native Host.</p>
                 <p class="codex-set-note" data-update-settings-state aria-live="polite" hidden></p>
                 <button type="button" class="codex-set-btn" data-check-updates data-i18n="checkForUpdates">Check for updates</button>
@@ -235,8 +243,11 @@
         instance.callbacks.onHistoryOpen?.();
       }
     });
+    container.querySelector('[data-storage-card]')?.addEventListener('toggle', event => {
+      if (event.target.open) instance.callbacks.onStorageOpen?.();
+    });
     container.querySelector('[data-history-filter]')?.addEventListener('input', () => instance.callbacks.onHistoryFilter?.());
-    // Experimental OT mirror: a single visible switch. The click is
+    // OT mirror: a single visible switch; legacy storage/DOM keys are retained. The click is
     // intercepted (the runtime's handler preventDefaults, runs the enable
     // confirmation, then sets checked + drives the change flow itself) so the
     // confirm-before-enable contract survives the control unification.
@@ -252,7 +263,12 @@
       const element = container.querySelector(selector);
       element?.addEventListener?.('change', event => {
         Promise.resolve(instance.callbacks.onInputChange?.(event))
-          .then(() => flashSaved(instance, event)).catch(() => {});
+          .then(() => {
+            flashSaved(instance, event);
+            if (selector === '[data-language-select]' && container.querySelector('[data-storage-card]')?.open) {
+              instance.callbacks.onStorageOpen?.();
+            }
+          }).catch(() => {});
       });
       element?.addEventListener?.('input', event => {
         Promise.resolve(instance.callbacks.onInputChange?.(event)).catch(() => {});
@@ -267,6 +283,7 @@
     setupGroupPersistence(instance);
 
     return {
+      get container() { return instance.container; },
       show: () => show(instance),
       hide: () => hide(instance),
       loadState: state => loadState(instance, state),

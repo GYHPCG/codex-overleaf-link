@@ -1323,30 +1323,50 @@ test('experimental OT warm mirror polls page OT events and patches the native mi
 });
 
 test('invalid native OT patch results mark the warm mirror inconsistent using skippedFiles fields', () => {
-  const contentScript = getContentScriptSource();
   const flushBody = extractFromContentScript( 'flushOtPatchBatch');
+  const controller = require('../extension/src/content/otWarmMirrorController');
+  const events = [{ path: 'main.tex', nextHash: 'next', observedAt: new Date().toISOString() }];
+  const complete = { appliedCount: 1, appliedFiles: [{ path: 'main.tex', hash: 'next' }] };
 
-  assert.match(flushBody, /skippedFiles/);
-  assert.match(flushBody, /skippedCount/);
+  assert.match(flushBody, /validatePatchReceipt\(batch,\s*response\.result\)/);
+  assert.match(flushBody, /if \(!receipt\.ok\)/);
+  assert.match(flushBody, /recordOtFailure\(receipt\.reason,\s*'flush'\)/);
   assert.match(flushBody, /updateOtStatusDisplay\('inconsistent'\)/);
   assert.doesNotMatch(flushBody, /result\?\.skipped\b|result\.skipped\b/);
+  for (const skipped of [{ skippedFiles: [{ path: 'main.tex' }] }, { skippedCount: 1 }]) {
+    const receipt = controller.validatePatchReceipt(events, { ...complete, ...skipped });
+    assert.equal(receipt.ok, false);
+    assert.equal(receipt.reason, 'mirror_patch_skipped');
+  }
 });
 
 test('native OT patch success requires valid appliedCount and appliedFiles evidence', () => {
-  const contentScript = getContentScriptSource();
   const flushBody = extractFromContentScript( 'flushOtPatchBatch');
+  const controller = require('../extension/src/content/otWarmMirrorController');
+  const events = [{ path: 'main.tex', nextHash: 'next', observedAt: new Date().toISOString() }];
+  const appliedFiles = [{ path: 'main.tex', hash: 'next' }];
+  const invalidResults = [
+    {},
+    { appliedCount: NaN, appliedFiles },
+    { appliedCount: 0, appliedFiles },
+    { appliedCount: -1, appliedFiles },
+    { appliedCount: 2, appliedFiles },
+    { appliedCount: 1, appliedFiles: [] },
+    { appliedCount: 1, appliedFiles: null },
+    { appliedCount: 1, appliedFiles: [{ path: 'other.tex', hash: 'next' }] },
+    { appliedCount: 1, appliedFiles: [{ path: 'main.tex', hash: 'wrong' }] }
+  ];
+  for (const result of invalidResults) {
+    assert.equal(controller.validatePatchReceipt(events, result).ok, false);
+  }
+  assert.equal(controller.validatePatchReceipt(events, { appliedCount: 1, appliedFiles }).ok, true);
 
-  assert.match(flushBody, /appliedFiles/);
-  assert.match(flushBody, /appliedCount/);
-  assert.match(flushBody, /Array\.isArray\(result\?\.appliedFiles\)/);
-  assert.match(flushBody, /Number\.isFinite\(Number\(result\?\.appliedCount\)\)/);
-  assert.match(flushBody, /appliedCount <= 0/);
-  assert.match(flushBody, /appliedFiles\.length !== appliedCount/);
-  const invalidResultIndex = flushBody.indexOf("otWarmMirrorState.lastErrorCode = 'mirror_patch_invalid_result'");
+  const invalidResultIndex = flushBody.indexOf('if (!receipt.ok)');
   const inconsistentIndex = flushBody.indexOf("updateOtStatusDisplay('inconsistent')", invalidResultIndex);
   const observingIndex = flushBody.indexOf("updateOtStatusDisplay('observing')");
 
-  assert.ok(invalidResultIndex >= 0, 'invalid applied evidence sets a native patch result error code');
+  assert.match(flushBody, /validatePatchReceipt\(batch,\s*response\.result\)/);
+  assert.ok(invalidResultIndex >= 0, 'invalid applied evidence is handled by the receipt validator');
   assert.ok(inconsistentIndex > invalidResultIndex, 'invalid applied evidence marks OT status inconsistent');
   assert.ok(
     observingIndex > inconsistentIndex,
@@ -1578,7 +1598,7 @@ test('scroll engine coalesces writes, re-checks intent at paint, and exposes a j
   // A forced scroll must survive the coalesce so it is never dropped.
   assert.match(contentScript, /scrollLogPendingForce/);
   // The paint-time write re-checks follow intent (closes the one-frame fight).
-  assert.match(contentScript, /const writeNow = \(\) =>[\s\S]*?scrollLogPendingForce \|\| logAutoFollow \|\| isLogNearBottom/);
+  assert.match(contentScript, /const writeNow = \(\) =>[\s\S]*?if \(scrollLogPendingForce \|\| logAutoFollow\)/);
   // Floating jump-to-latest button: created lazily in the non-scrolling thread
   // section, toggled by the scroll handler + the unread counter.
   assert.match(contentScript, /function ensureJumpToLatestButton\(/);
@@ -4156,7 +4176,7 @@ test('saveState merges latest lightweight prefs before saving project-scoped set
 test('experimental OT sync ignores stale responses and reverts failed starts to default off', () => {
   const contentScript = getContentScriptSource();
   const syncBody = contentScript.match(/async function syncOtWarmMirrorController\(\) \{[\s\S]*?\n  \}/)?.[0] || '';
-  const failBody = contentScript.match(/function handleFailedOtStart\(projectId, requestId\) \{[\s\S]*?\n  \}/)?.[0] || '';
+  const failBody = extractFromContentScript('handleFailedOtStart');
   const projectChangeBody = contentScript.match(/function syncOtWarmMirrorStateForProject\(\) \{[\s\S]*?\n  \}/)?.[0] || '';
 
   assert.match(contentScript, /let otSyncRequestId\s*=\s*0/);
@@ -4168,7 +4188,7 @@ test('experimental OT sync ignores stale responses and reverts failed starts to 
   assert.match(syncBody, /getCurrentProjectId\(\) !== projectId/);
   assert.match(syncBody, /handleStaleOtStartResponse\(projectId,\s*requestId\)/);
   assert.match(syncBody, /isSuccessfulOtBridgeResponse\(response\)/);
-  assert.match(syncBody, /handleFailedOtStart\(projectId,\s*requestId\)/);
+  assert.match(syncBody, /handleFailedOtStart\(projectId,\s*requestId,\s*response\)/);
   assert.match(failBody, /setExperimentalOtEnabledForProject\(projectId,\s*false\)/);
   assert.match(failBody, /experimentalOtCheckbox\.checked = false/);
   assert.match(failBody, /updateOtStatusDisplay\('unavailable'\)/);
@@ -5287,18 +5307,18 @@ test('appendRunEvent preserves detailStructured through the event-shape contract
     'event must include sanitized detailStructured');
 });
 
-test('panel.css ships a muted meta block style with separator', () => {
+test('panel.css ships a compact muted meta block without an extra separator', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'extension', 'styles', 'panel.css'), 'utf8');
   assert.match(src, /\.run-final-answer__meta\b/, 'meta block class must exist');
   assert.match(src, /\.run-final-answer__meta-label\b/, 'meta label class must exist');
   assert.match(src, /\.run-final-answer__meta-value\b/, 'meta value class must exist');
-  // The defining characteristic the user picked: separator (border-top) plus
-  // a muted color on a smaller font. The v1.3.10 redesign moved these to
-  // design tokens (--tl-border / --tl-fg-3) and bumped 11.5px -> 12px to clear
-  // WCAG-AA at the muted color.
+  // The current design uses spacing and alignment instead of another rule,
+  // retaining readable type and the established muted color token.
   const metaBlock = src.match(/\.run-final-answer__meta\s*\{[^}]*\}/);
   assert.ok(metaBlock, 'meta block CSS rule must be present');
-  assert.match(metaBlock[0], /border-top:\s*1px solid/, 'meta block must have a top separator');
+  assert.doesNotMatch(metaBlock[0], /border-top\s*:/, 'meta block must not add another separator');
+  assert.match(metaBlock[0], /display:\s*grid/, 'metadata labels and values remain aligned');
+  assert.match(metaBlock[0], /margin:\s*[1-9]\d*px/, 'spacing separates metadata from the answer');
   assert.match(metaBlock[0], /font-size:\s*12px/, 'meta block uses the readable 12px size');
   assert.match(metaBlock[0], /color:\s*var\(--tl-fg-3\)/, 'meta block must use the muted token color');
 });

@@ -359,7 +359,7 @@
     if (!options.collectOnly) {
       showDiagnosticsLoading(tr('diagnosticsOtTitle'), tr('diagnosticsLoading'));
     }
-    // OT warm mirror is experimental and off by default. When it is disabled
+    // OT warm mirror is opt-in and off by default. When it is disabled
     // there is nothing live to probe, so report a clean, healthy "disabled"
     // state instead of querying (then warning about) absent OT metadata — or
     // degrading to the generic "could not run" error if a probe throws. A
@@ -374,6 +374,14 @@
         nextStep: '',
         technical: ''
       };
+      const mirrorState = getOtWarmMirrorState?.() || {};
+      if (mirrorState.failureActive && mirrorState.lastFailure) {
+        const failure = mirrorState.lastFailure;
+        disabledResult.status = 'warning';
+        disabledResult.summary = tr(otWarmMirrorController.getFailureMessageKey(failure.code));
+        disabledResult.nextStep = tr('otFailureNextStep');
+        disabledResult.technical = `lastErrorCode: ${failure.code}\nphase: ${failure.phase}\nfailedAt: ${new Date(failure.at).toISOString()}`;
+      }
       if (options.collectOnly) {
         return disabledResult;
       }
@@ -434,6 +442,7 @@
     const queuedEventCount = normalizeOtDiagnosticsCount(otStatus?.queuedEventCount);
     const lastEventAt = formatOtDiagnosticValue(otStatus?.lastEventAt, tr('noneValue'));
     const warmMirrorState = getOtWarmMirrorState() || {};
+    const failureActive = warmMirrorState.failureActive === true;
     const lastOtPatchAt = formatOtDiagnosticValue(mirrorStatus?.lastOtPatchAt || warmMirrorState.lastPatchAt, tr('noneValue'));
     const lastOtErrorCode = formatOtDiagnosticValue(mirrorStatus?.lastOtErrorCode || warmMirrorState.lastErrorCode, tr('noneValue'));
     const lastErrorCode = formatOtDiagnosticValue(otStatus?.lastErrorCode || otStatus?.reason || otStatus?.error, tr('noneValue'));
@@ -445,13 +454,14 @@
     const bridgeFailed = otStatus?.ok === false;
     const focusFiles = getActiveFocusFiles();
     const otWarmStart = otWarmMirrorController?.canUseOtWarmStart?.({ enabled, focusFiles, mirrorStatus }) || { ok: false };
-    const fallback = !enabled || statusValue !== 'observing' || bridgeFailed || otWarmStart?.ok !== true;
+    const fallback = !enabled || failureActive || statusValue !== 'observing' || bridgeFailed || otWarmStart?.ok !== true;
 
     return {
       title: tr('diagnosticsOtTitle'),
       subtitle: tr('diagnosticsOtSubtitle'),
       status: enabled && !fallback && !bridgeFailed ? 'completed' : (enabled || bridgeFailed ? 'warning' : 'completed'),
-      summary: tr(enabled ? 'diagnosticsOtSummaryEnabled' : 'diagnosticsOtSummaryDisabled'),
+      summary: tr(failureActive ? otWarmMirrorController.getFailureMessageKey(warmMirrorState.lastErrorCode)
+        : enabled ? 'diagnosticsOtSummaryEnabled' : 'diagnosticsOtSummaryDisabled'),
       bullets: [
         `${tr('otStatus')}: ${formatOtStatusLabel(statusValue)}`,
         `${tr('otFreshFiles')}: ${otFreshFileCount}`,

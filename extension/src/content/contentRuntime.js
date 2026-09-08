@@ -418,6 +418,8 @@
   const runTimelineView = Modules.RunTimelineView.create({
     RunGuidanceView: Modules.RunGuidanceView,
     RunResultActions: runResultActions,
+    RunScrollLayout: Modules.RunScrollLayout,
+    RunFailureNotice: Modules.RunFailureNotice,
     tr,
     tx,
     getLocale,
@@ -835,6 +837,7 @@
   });
 
   let panel = null;
+  let probeStatusSnapshot = null;
   let panelRendererInstance = null;
   let sessionPanelInstance = null;
   let settingsPanelInstance = null;
@@ -1031,7 +1034,7 @@
     providerSettingsCoordinator.syncSessionProvider().catch(() => {});
     syncOtWarmMirrorController().catch(error => {
       updateOtStatusDisplay('unavailable');
-      appendPlainLog(tx(`Failed to sync experimental OT warm mirror: ${error.message}`, `同步实验性 OT 预热镜像失败：${error.message}`));
+      appendPlainLog(tx(`Failed to sync OT warm mirror: ${error.message}`, `同步 OT 预热镜像失败：${error.message}`));
     });
     await refreshProbe({ quiet: true });
   }
@@ -1274,6 +1277,7 @@
           onProvidersOpen: () => providerSettingsCoordinator.open(),
           onClearAllHistory: () => clearAllHistoryWithConfirm(),
           onHistoryOpen: () => renderAuditHistoryPanel(),
+          onStorageOpen: () => refreshStorageUsageSummary(),
           onHistoryFilter: () => applyAuditHistoryFilter(),
           // Experimental OT mirror: a single visible switch whose click is
           // intercepted so the confirm-before-enable flow still runs.
@@ -1444,9 +1448,6 @@
   function renderAttachmentPreviewList(attachments = [], container, options = {}) {
     return composerAttachmentController.renderAttachmentPreviewList(attachments, container, options);
   }
-
-
-
   function applyLocaleToPanel() {
     if (!panel) {
       return;
@@ -1535,6 +1536,17 @@
     updateModelDisplay();
     renderSessionList();
     renderContextSelection();
+    const probeStatus = panel.querySelector('[data-probe-status]');
+    if (probeStatus?.dataset.refreshing === 'true') probeStatus.textContent = tr('refreshProbeLoading');
+    else if (probeStatus && probeStatusSnapshot?.projectId === getCurrentProjectId()) {
+      const { failed, probe, userInitiated } = probeStatusSnapshot;
+      const text = failed ? tr('refreshProbeFailed') : formatProbeStatusBar(probe);
+      probeStatus.textContent = userInitiated && !failed ? tr('refreshProbeDone', { status: text }) : text;
+      if (!failed) updateExistingProbeNotice(probe);
+    }
+    updateSkillsEntrySummary();
+    providerSettingsCoordinator.renderSummary();
+    if (settingsPanelInstance?.container?.querySelector('[data-storage-card]')?.open) refreshStorageUsageSummary();
   }
 
   function setElementTitleAndAria(selector, title, ariaLabel) {
@@ -2393,7 +2405,7 @@
         }
 
         await saveState();
-        applyStateToPanel();
+        applyStateToPanel({ preserveScroll: true });
       } catch (persistenceError) {
         appendRunEvent({
           title: tx('Codex result was generated, but saving local session history failed.', 'Codex 结果已生成，但保存本地会话记录失败。'),
@@ -4943,6 +4955,7 @@
   }
 
   async function refreshProbe(options = {}) {
+    const projectId = getCurrentProjectId();
     const userInitiated = options.userInitiated === true;
     if (userInitiated) {
       setRefreshProbeLoading(true);
@@ -4958,6 +4971,8 @@
       const probe = await callPageBridge('probe', {
         manualOverride: state?.requireReviewing === false
       });
+      if (projectId !== getCurrentProjectId()) return null;
+      probeStatusSnapshot = { projectId, probe, userInitiated };
       const status = panel?.querySelector('[data-probe-status]');
       if (status) {
         status.textContent = userInitiated
@@ -4976,6 +4991,8 @@
       if (!userInitiated) {
         throw error;
       }
+      if (projectId !== getCurrentProjectId()) return null;
+      probeStatusSnapshot = { projectId, failed: true };
       const status = panel?.querySelector('[data-probe-status]');
       if (status) {
         status.textContent = tr('refreshProbeFailed');
@@ -6069,7 +6086,7 @@
     saveStateSoon();
   }
 
-  function applyStateToPanel() {
+  function applyStateToPanel(options = {}) {
     applyPanelTheme(getThemePreference());
     if ((state.providerId || 'builtin') === 'builtin' && !modelSelectHasOption(state.model)) {
       renderModelOptions(getModelCatalog().FALLBACK_MODELS, state.model);
@@ -6105,7 +6122,7 @@
     syncModeControls();
     applySessionLabel();
     renderSessionList();
-    renderRunHistory();
+    renderRunHistory(options);
     renderContextSelection();
     renderContextSummary();
     // v1.8.0 C4: refresh recovery — small attachments persisted in state are

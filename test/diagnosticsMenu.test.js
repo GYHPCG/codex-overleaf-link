@@ -48,14 +48,15 @@ test('project snapshot action lives in the diagnostics menu instead of the heade
   assert.match(panelSource, /Check Local Connection/);
   assert.match(panelSource, /Check Overleaf Write Access/);
   assert.match(panelSource, /Check Project Read/);
-  assert.match(panelSource, /Check Experimental OT Mirror/);
-  // The experimental OT toggle + the language selector now live in Settings.
+  assert.match(panelSource, /Check OT Mirror/);
+  assert.doesNotMatch(panelSource, /Check Experimental OT Mirror/);
+  // OT keeps its persisted control key while its visible label is promoted.
   // v1.7.5: the dual hidden-checkbox + button control became a single visible
   // switch (the checkbox itself); the confirm-before-enable click interceptor
   // binds to it directly.
   assert.match(settingsPanel, /data-experimental-ot\b/);
   assert.doesNotMatch(settingsPanel, /data-experimental-ot-toggle/);
-  assert.match(settingsPanel, /<span data-i18n="experimentalOtMenuTitle">Experimental OT Mirror<\/span>/);
+  assert.match(settingsPanel, /<span data-i18n="experimentalOtMenuTitle">OT Mirror<\/span>/);
   assert.match(settingsPanel, /data-language-select/);
   assert.match(contentScript, /function applyLocaleToPanel\(/);
   assert.match(diagnosticsController, /function inspectNativeEnvironment\(/);
@@ -192,7 +193,7 @@ test('experimental OT diagnostics read metadata without draining project content
   assert.doesNotMatch(formatBody, /JSON\.stringify\((otStatus|mirrorStatus)/);
 });
 
-test('experimental OT diagnostics i18n is available in English and Chinese', () => {
+test('OT diagnostics i18n is available in English and Chinese without experimental labels', () => {
   const I18n = require('../extension/src/shared/i18n');
   const keys = [
     'diagnosticsOtTitle',
@@ -218,13 +219,16 @@ test('experimental OT diagnostics i18n is available in English and Chinese', () 
     assert.notEqual(I18n.t('zh', key), key, `missing Chinese i18n key ${key}`);
   }
 
-  assert.equal(I18n.t('en', 'experimentalOtMenuTitle'), 'Experimental OT Mirror');
-  assert.equal(I18n.t('zh', 'experimentalOtMenuTitle'), '实验性 OT Mirror');
+  assert.equal(I18n.t('en', 'experimentalOtMenuTitle'), 'OT Mirror');
+  assert.equal(I18n.t('zh', 'experimentalOtMenuTitle'), 'OT Mirror');
   assert.equal(I18n.t('en', 'experimentalOtConfirmEnable'), 'Turn on');
   assert.equal(I18n.t('zh', 'experimentalOtConfirmEnable'), '开启');
   assert.doesNotMatch(I18n.t('en', 'experimentalOtConfirmMessage'), /[\u4e00-\u9fff]/);
   assert.doesNotMatch(I18n.t('zh', 'experimentalOtConfirmMessage'), /Experimental: tracks/);
   for (const locale of ['en', 'zh']) {
+    for (const key of ['experimentalOtMenuTitle', 'diagnosticsOtSummaryEnabled', 'diagnosticsOtSummaryDisabled']) {
+      assert.doesNotMatch(I18n.t(locale, key), /experimental|实验性/i);
+    }
     for (const key of [
       'experimentalOtMenuTitle',
       'experimentalOtMenuSubtitle',

@@ -5,12 +5,13 @@
       require('./settlementFacts'),
       require('./runInputQueue'),
       require('./lineReferences'),
-      require('./pathRedaction')
+      require('./pathRedaction'),
+      require('./sessionTitle')
     );
   } else {
     root.CodexOverleafModuleRegistry.define(
       'SessionState',
-      ['I18n', 'SettlementFacts', 'RunInputQueue', 'LineReferences', 'PathRedaction'],
+      ['I18n', 'SettlementFacts', 'RunInputQueue', 'LineReferences', 'PathRedaction', 'SessionTitle'],
       factory
     );
   }
@@ -19,7 +20,8 @@
   SettlementFacts,
   RunInputQueue,
   LineReferences,
-  PathRedaction
+  PathRedaction,
+  SessionTitle
 ) {
   'use strict';
 
@@ -402,6 +404,12 @@
       ) {
         next.title = session.title;
         next.titleSource = 'manual';
+      } else if (session.titleSource === 'auto' && patch.titleSource !== 'manual'
+        && typeof patch.title === 'string' && patch.title.trim() && session.runs?.length
+        && SessionTitle.isGeneric(sanitizeAutoTitle(patch.title))
+        && !SessionTitle.isGeneric(sanitizeAutoTitle(session.title))) {
+        next.title = session.title;
+        next.titleSource = 'auto';
       }
       return normalizeSession({
         ...next
@@ -472,12 +480,7 @@
   }
 
   function deriveSessionTitle(runs, task) {
-    const taskTitle = sanitizeAutoTitle(task);
-    if (taskTitle) {
-      return taskTitle;
-    }
-    const firstRunTask = Array.isArray(runs) && runs.length ? runs[0]?.task : '';
-    return sanitizeAutoTitle(firstRunTask);
+    return SessionTitle.derive(runs, task, { sanitize: sanitizeAssistantVisibleText, maxChars: SESSION_AUTO_TITLE_CHARS });
   }
 
   // Rename a session with the placeholder/derived-title ghost guard (mirrors
@@ -519,21 +522,14 @@
     if (titleSource === 'manual') {
       return normalizeTextField(rawTitle === LEGACY_DEFAULT_SESSION_TITLE ? '' : rawTitle, STORAGE_DEFAULT_LIMITS.sessionTitleChars);
     }
-    return sanitizeAutoTitle(rawTitle === LEGACY_DEFAULT_SESSION_TITLE ? '' : rawTitle) || derivedTitle || '';
+    const current = sanitizeAutoTitle(rawTitle === LEGACY_DEFAULT_SESSION_TITLE ? '' : rawTitle);
+    if (!current || SessionTitle.isGeneric(current)) return derivedTitle || current || '';
+    if (current.endsWith('…') && derivedTitle.startsWith(current.slice(0, -1))) return derivedTitle;
+    return current;
   }
 
   function sanitizeAutoTitle(value) {
-    const title = sanitizeAssistantVisibleText(value)
-      .replace(/@file:[^\s]+/g, ' ')
-      .replace(/@(context|compile-log)\b/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (!title) {
-      return '';
-    }
-    return title.length > SESSION_AUTO_TITLE_CHARS
-      ? `${title.slice(0, SESSION_AUTO_TITLE_CHARS - 1)}…`
-      : title;
+    return SessionTitle.fromPrompt(value, { sanitize: sanitizeAssistantVisibleText, maxChars: SESSION_AUTO_TITLE_CHARS });
   }
 
   function isDisplayableSession(session) {
