@@ -1,6 +1,7 @@
 <div align="center">
   <img src="extension/assets/icons/codex-overleaf-icon.png" width="96" alt="Codex Overleaf Link">
   <h1>Codex Overleaf Link</h1>
+  <p><strong>English</strong> | <a href="README.zh-CN.md" lang="zh-CN">简体中文</a></p>
   <p><strong>Empower Overleaf with Codex.</strong></p>
   <p>
     <img src="https://img.shields.io/badge/version-2.3.6-blue" alt="version">
@@ -38,14 +39,14 @@ Codex Overleaf Link adds a Codex panel directly inside Overleaf and mirrors the 
 - **Project rules and preflight** — read-only / writable path rules gate browser writes; sensitive-content detection checks task context before sending it to Codex. File focus prioritizes context; use project rules to enforce writable paths.
 - **Models and skills** — discover local Codex models, choose supported reasoning and speed settings, and install or select Codex Overleaf skills from the slash menu. Skill loading and individual skill enablement are configurable.
 - **Local records and diagnostics** — preserve run outcomes and recovery evidence, inspect diagnostics, and export redacted issue-report bundles. Plugin Codex sessions use an isolated home.
+- **OT warm mirror** (Operational Transformation) keeps focused mirror files warm through optional, read-only observation of active Overleaf text edits. It is off by default and falls back to the normal snapshot path when unavailable, stale, or inconsistent. Overleaf writeback still uses the page bridge.
+
+OT freshness expires after 30 seconds, and focused warm starts still verify current file content through the page bridge. OT observation never establishes whole-project freshness or replaces the Overleaf writeback path.
 
 ### Experimental features
 
 - **Third-party model providers** — configure Responses API, OpenAI-compatible Chat Completions, or Anthropic Messages endpoints in Settings. The local Codex CLI remains the agent runtime, with local protocol bridges adapting the selected endpoint. Compatibility varies by model and gateway; the built-in Codex provider remains the default.
 - **Parallel subagents** — enable the `parallel-subagents` skill for decomposable tasks. The native host runs workers with assigned files; the skill can split a single file into section jobs. Worker progress appears in the timeline, and detected ownership violations are withheld from Overleaf writeback.
-- **OT warm mirror** — optional, read-only observation of active Overleaf text edits keeps focused mirror files warm. It is off by default and falls back to the normal snapshot path when unavailable, stale, or inconsistent. Overleaf writeback still uses the page bridge.
-
-OT freshness expires after 30 seconds, and focused warm starts still verify current file content through the page bridge. OT observation never establishes whole-project freshness or replaces the Overleaf writeback path.
 
 ## Requirements
 
@@ -132,7 +133,10 @@ There are two task modes, Ask and Auto. Track is a separate setting for Auto wri
 
 Auto text writes do not wait for a per-hunk approval step. Deletes and binary create/overwrite operations require separate confirmation. Track applies to supported text edits; it does not make every file-tree or binary operation reversible.
 
-**Accept** finalizes this run's tracked text edits and leaves Overleaf in Editing mode. If the operation unexpectedly creates new tracked changes, the extension attempts to roll it back and reports what could be verified.
+**Accept** is intended to finalize a run's tracked text edits and leaves Overleaf in Editing mode. If the operation unexpectedly creates new tracked changes, the extension attempts to roll it back and reports what could be verified.
+
+> [!WARNING]
+> Do not use the run card's **Accept** action when the affected files contain unrelated pending tracked changes from other runs or collaborators. Review and accept those changes individually in Overleaf's native Review panel. An Accepted badge or successful compilation alone does not prove that unrelated pending changes were preserved.
 
 **Undo** uses the run's saved recovery information. Concurrent changes or incomplete verification can prevent a full restoration. Cancel stops further work but does not automatically undo writes that already reached Overleaf; inspect the run card for the written parts and available recovery actions.
 
@@ -191,7 +195,6 @@ Update downloads retry transient network failures within a bounded time budget, 
 
 After a manual reinstall, installed files and running components are shown separately. Use the reload action once Overleaf is saved and idle; pending Overleaf tabs can then refresh. A disk replacement alone is not reported as a successfully health-confirmed update.
 
-
 Managed installations **check** for signed stable updates automatically. When an update is available, choose **Update now** in the update notice or **Settings → Software updates** to authorize that version. The updater then downloads and verifies the coordinated extension/native bundle, waits until connected Overleaf tabs are saved and idle and the native host has no active work, and applies both components together. A failed health check restores the previous version. The update notice also offers postponement and progress details.
 
 Stable updates use signed release metadata and artifact hashes; draft and prerelease versions are not selected. Releases that require a different Bootstrap protocol need a managed reinstall. The updater does not silently add Chrome permissions.
@@ -239,7 +242,7 @@ node ~/.codex-overleaf/source/scripts/uninstall-native-host.mjs
 ```
 
 ```powershell
-node $env:LOCALAPPDATA\CodexOverleaf\source\scripts\uninstall-native-host.mjs
+node "$env:LOCALAPPDATA\CodexOverleaf\source\scripts\uninstall-native-host.mjs"
 ```
 
 `uninstall-managed` removes the registered Native Messaging host, bridge executable, managed extension, and versioned native runtime. `uninstall-native` removes the native-only registration and runtime copy. Neither command clears browser session history/settings, project mirrors, plugin Codex history, provider credentials, or stored skills.
@@ -283,6 +286,8 @@ The stale-write guard checks the original content and expected patch ranges. It 
 **Track / Accept / Undo is unavailable**
 
 Track requires an Overleaf Reviewing state that the extension can verify. Accept and Undo depend on the run's actual writes and saved recovery evidence; some operations or later collaborator edits prevent full recovery. Follow the run card's specific next action. Turning Track off selects ordinary Editing for future Auto runs.
+
+If files were written but Accept is missing, inspect the actual changes in Overleaf before retrying. Repeating a task solely to recover the button can duplicate edits. Export redacted diagnostics with the run result when reporting the issue.
 
 **Governance blocked write**
 
@@ -396,13 +401,13 @@ illdpneeeopfffmiepaejglgmhpmdhdc
 The installer uses this id by default. For a managed installation with a custom id, rerun the managed installer with the id shown in `chrome://extensions`:
 
 ```bash
-npm exec --yes codex-overleaf-link@2.3.6 -- install-managed --extension-id <your-chrome-extension-id>
+npm exec --yes codex-overleaf-link@2.3.6 -- install-managed --extension-id "<your-chrome-extension-id>"
 ```
 
 For an unmanaged extension, use the native-only installer:
 
 ```bash
-npm exec --yes codex-overleaf-link@2.3.6 -- install-native --extension-id <your-chrome-extension-id>
+npm exec --yes codex-overleaf-link@2.3.6 -- install-native --extension-id "<your-chrome-extension-id>"
 ```
 
 Both npm commands work in PowerShell. Source installers also accept the `CODEX_OVERLEAF_EXTENSION_ID` environment variable. The Native Messaging manifest's `allowed_origins` must match the loaded extension id.
@@ -467,6 +472,8 @@ Full uninstall and data deletion:
 3. Remove the extension entry from `chrome://extensions` in each browser profile. Chrome removes that extension's `chrome.storage.local` settings when it is uninstalled. See the [Chrome storage API documentation](https://developer.chrome.com/docs/extensions/reference/api/storage#storage_areas).
 4. To erase all remaining default filesystem data, including project mirrors, plugin Codex history, provider credentials, skills, and source checkouts, use the appropriate command below. Also remove any custom installation roots you configured.
 
+**The following commands permanently delete data in the listed directories. Back up any project mirrors, history, or configuration that must be kept before running them.**
+
 macOS/Linux:
 
 ```bash
@@ -513,6 +520,10 @@ Contributions are welcome. Please open an issue before submitting large changes 
 3. Run `npm test` and ensure all tests pass.
 4. Submit a pull request with a clear description.
 
+Keep [README.md](README.md) and [README.zh-CN.md](README.zh-CN.md) aligned when changing behavior, version pins, installation commands, or troubleshooting. Translate prose while preserving commands, file paths, and API identifiers.
+
 ## License
 
 [MIT](LICENSE)
+
+<p align="center"><strong>English</strong> | <a href="README.zh-CN.md" lang="zh-CN">简体中文</a></p>
