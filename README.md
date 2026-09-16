@@ -62,31 +62,45 @@ OT freshness expires after 30 seconds, and focused warm starts still verify curr
 
 ## Install
 
-Codex Overleaf Link has two parts: a **native host** (a local Node bridge) and the **Chrome extension**. Pick one of the two install paths below, then open Overleaf.
+Codex Overleaf Link has two parts: a **native host** (a local Node bridge) and the **Chrome extension**. Installation with Codex is recommended; the installer script and npm commands remain available below.
 
-Either way, the final **Load unpacked** click is manual — Chrome does not let any installer or script load an unpacked extension for you.
+Chrome may require a manual **Load unpacked** or **Reload** action. Codex should explain any remaining browser step and respect browser and operating-system permission boundaries.
 
-### Option A — installer script (recommended)
+### Option A: Let Codex install it (recommended)
+
+Give the following prompt to Codex with terminal access on the computer where Chrome runs:
+
+```text
+Install Codex Overleaf Link from https://github.com/Ghqqqq/codex-overleaf-link on this computer.
+
+Read the official README and installation scripts first. Detect the operating system and check Node.js >= 20, Codex CLI, and any other prerequisites required by the selected installation method.
+Use the latest published stable GitHub release, excluding drafts and prereleases, unless a specific version was requested. Use the documented managed installation method and install matching Extension and Native Host versions; do not substitute an unreleased main checkout.
+Reuse the existing Chrome profile and managed installation when available. Preserve project files, session history, settings, and provider credentials. Do not print secrets or remove an existing installation without approval.
+Complete the terminal-side setup and checks. If Chrome requires a manual Load unpacked or Reload action, provide the exact managed extension folder and the remaining steps; do not bypass browser restrictions.
+Report the chosen release, installed Extension and Native Host versions, the browser-loaded version when observable, and the native connection check. Matching on-disk versions alone do not prove Chrome has loaded the update. Clearly identify anything still requiring manual action.
+```
+
+### Option B: installer script
 
 One command installs the managed native host **and** managed extension runtime. On macOS/Linux it also creates the visible `~/Codex Overleaf Link Extension` shortcut when that path is available. The script attempts to copy the extension path on macOS and Windows; on macOS it also attempts to open Chrome's extensions page. Every platform prints the folder to load. Future signed stable updates target this same managed directory.
 
 macOS / Linux:
 
 ```bash
-CODEX_OVERLEAF_REF=v2.3.6 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Ghqqqq/codex-overleaf-link/v2.3.6/install.sh)"
+CODEX_OVERLEAF_REF=v2.4.0 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Ghqqqq/codex-overleaf-link/v2.4.0/install.sh)"
 ```
 
 Windows PowerShell:
 
 ```powershell
-iwr https://raw.githubusercontent.com/Ghqqqq/codex-overleaf-link/v2.3.6/install.ps1 -OutFile install.ps1
-$env:CODEX_OVERLEAF_REF='v2.3.6'
+iwr https://raw.githubusercontent.com/Ghqqqq/codex-overleaf-link/v2.4.0/install.ps1 -OutFile install.ps1
+$env:CODEX_OVERLEAF_REF='v2.4.0'
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
 Then open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and choose the extension folder printed by the installer. If the installer reports that it copied the path, you can paste it into the folder picker.
 
-### Option B — npm managed install
+### Option C: npm managed install
 
 `npm exec` installs the same managed native host and extension runtime without keeping a source checkout. Use it if you prefer a pinned npm package.
 
@@ -381,7 +395,7 @@ The shipped extension targets `https://overleaf.com/project` and `https://www.ov
 Linux Chromium install or update:
 
 ```bash
-CODEX_OVERLEAF_REF=v2.3.6 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Ghqqqq/codex-overleaf-link/v2.3.6/install.sh)" -- --browser chromium
+CODEX_OVERLEAF_REF=v2.4.0 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Ghqqqq/codex-overleaf-link/v2.4.0/install.sh)" -- --browser chromium
 ```
 
 Linux Chromium uninstall:
@@ -414,14 +428,14 @@ Both npm commands work in PowerShell. Source installers also accept the `CODEX_O
 
 ## GitHub Release Artifacts
 
-The v2.3.6 GitHub Release contains:
+The v2.4.0 GitHub Release contains:
 
-- `codex-overleaf-link-extension-v2.3.6.zip`: loadable Chrome extension package for manual unpacked installation.
-- `codex-overleaf-native-host-v2.3.6.tar.gz`: native host runtime files used by the installer and release verification.
-- `codex-overleaf-update-v2.3.6.tar.gz`: coordinated extension/native bundle used by the managed updater.
+- `codex-overleaf-link-extension-v2.4.0.zip`: loadable Chrome extension package for manual unpacked installation.
+- `codex-overleaf-native-host-v2.4.0.tar.gz`: native host runtime files used by the installer and release verification.
+- `codex-overleaf-update-v2.4.0.tar.gz`: coordinated extension/native bundle used by the managed updater.
 - `codex-overleaf-link-2.4.0.tgz`: npm native host CLI package for pinned install, doctor, and uninstall flows.
-- `install.sh`: release-pinned macOS / Linux installer that defaults to `v2.3.6` when run directly from the release artifact.
-- `install.ps1`: release-pinned Windows PowerShell installer that defaults to `v2.3.6` when run directly from the release artifact.
+- `install.sh`: release-pinned macOS / Linux installer that defaults to `v2.4.0` when run directly from the release artifact.
+- `install.ps1`: release-pinned Windows PowerShell installer that defaults to `v2.4.0` when run directly from the release artifact.
 - `uninstall-native-host.mjs`: native host uninstaller that removes the Chrome Native Messaging manifest, bridge executable, and runtime copy.
 - `nativeHostPlatform.js`, `manifest.js`, `runtimeInstaller.js`: helper files required by the loose uninstaller asset.
 - `SHA256SUMS`, `release-manifest.json`, and `release-manifest.sig`: checksums, release metadata, and its Ed25519 signature.

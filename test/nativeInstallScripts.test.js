@@ -1416,6 +1416,21 @@ test('README documents stable cross-platform manual install, uninstall, release 
   const readme = fs.readFileSync(path.join(__dirname, '../README.md'), 'utf8');
   const stable = readStableReleaseMetadata(readme);
 
+  const chineseReadme = fs.readFileSync(path.join(__dirname, '../README.zh-CN.md'), 'utf8');
+  for (const [document, recommendedHeading] of [
+    [readme, /^### Option A: Let Codex install it \(recommended\)$/m],
+    [chineseReadme, /^### 方式 A：让 Codex 安装（推荐）$/m]
+  ]) {
+    assert.match(document, recommendedHeading);
+    assert.ok(document.includes(`CODEX_OVERLEAF_REF=${stable.ref} bash -c`));
+    assert.ok(document.includes(`https://raw.githubusercontent.com/Ghqqqq/codex-overleaf-link/${stable.ref}/install.sh`));
+    assert.ok(document.includes(stable.windowsInstallUrl));
+    assert.ok(document.includes(stable.windowsRefCommand));
+    assert.ok(document.includes(`${stable.npmExecPrefix} install-managed`));
+    const agentPrompt = document.match(/```text\n([\s\S]*?)\n```/)?.[1] || '';
+    assert.ok(agentPrompt.includes('https://github.com/Ghqqqq/codex-overleaf-link'));
+  }
+
   assert.match(readme, new RegExp(`CODEX_OVERLEAF_REF=${escapeRegExp(stable.ref)}\\s+bash -c "\\$\\(curl -fsSL https://raw\\.githubusercontent\\.com/Ghqqqq/codex-overleaf-link/${escapeRegExp(stable.ref)}/install\\.sh\\)"`));
   assert.ok(readme.includes(`${stable.npmExecPrefix} install-managed`));
   assert.match(readme, new RegExp(`iwr\\s+https://raw\\.githubusercontent\\.com/Ghqqqq/codex-overleaf-link/${escapeRegExp(stable.ref)}/install\\.ps1`, 'i'));

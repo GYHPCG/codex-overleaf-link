@@ -62,31 +62,45 @@ OT 预热数据的有效期为 30 秒；使用焦点文件预热启动时，仍�
 
 ## 安装
 
-Codex Overleaf Link 包含两个部分：**本地宿主（Native Host）**和 **Chrome 扩展**。本地宿主是运行在本机的 Node.js 桥接程序，负责连接浏览器与 Codex。选择以下任一安装方式，再打开 Overleaf 即可。
+Codex Overleaf Link 包含两个部分：**本地宿主（Native Host）**和 **Chrome 扩展**。本地宿主是运行在本机的 Node.js 桥接程序，负责连接浏览器与 Codex。推荐让 Codex 完成托管安装，下方也保留安装脚本和 npm 命令。
 
-两种方式都需要手动完成最后一步 **Load unpacked（加载已解压的扩展程序）**；Chrome 不允许安装器或脚本代替用户完成这一操作。
+Chrome 可能要求手动执行 **Load unpacked（加载已解压的扩展程序）**或 **Reload（重新加载）**。Codex 应说明剩余步骤，并遵守浏览器和操作系统的权限限制。
 
-### 方式 A：安装脚本（推荐）
+### 方式 A：让 Codex 安装（推荐）
+
+将以下提示词交给在 Chrome 所在电脑上具有终端权限的 Codex：
+
+```text
+请在当前电脑上安装 Codex Overleaf Link：https://github.com/Ghqqqq/codex-overleaf-link
+
+先阅读官方 README 和安装脚本，识别操作系统，检查 Node.js >= 20、Codex CLI 以及所选安装方式需要的其他前提。
+除非已指定版本，否则选择 GitHub 上最新已发布的稳定版，排除草稿和预发布版本。按文档使用托管安装，安装版本一致的 Extension 和 Native Host，不要用尚未发布的 main 源码代替稳定版。
+已有 Chrome 配置文件和托管安装时优先复用，保留项目文件、会话历史、设置及 Provider 凭据。不要输出密钥，也不要未经同意移除已有安装。
+完成终端侧的安装和检查。若 Chrome 要求手动加载已解压扩展或重新加载，给出准确的托管扩展目录和剩余步骤，不要绕过浏览器限制。
+最后报告所选发布版本、已安装的 Extension 和 Native Host 版本、可观测到的浏览器实际加载版本，以及 Native 连接检查结果。磁盘版本一致不能证明 Chrome 已加载更新；需要人工完成的操作应明确列出。
+```
+
+### 方式 B：安装脚本
 
 一条命令安装配套的托管 Native Host 和扩展运行时。在 macOS/Linux 上，如果对应路径可用，还会创建方便选择的 `~/Codex Overleaf Link Extension` 快捷入口。脚本会尝试在 macOS 和 Windows 上复制扩展路径，并在 macOS 上打开 Chrome 扩展管理页。所有平台都会打印需要加载的目录。后续签名正式版更新会沿用该托管目录。
 
 macOS / Linux：
 
 ```bash
-CODEX_OVERLEAF_REF=v2.3.6 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Ghqqqq/codex-overleaf-link/v2.3.6/install.sh)"
+CODEX_OVERLEAF_REF=v2.4.0 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Ghqqqq/codex-overleaf-link/v2.4.0/install.sh)"
 ```
 
 Windows PowerShell：
 
 ```powershell
-iwr https://raw.githubusercontent.com/Ghqqqq/codex-overleaf-link/v2.3.6/install.ps1 -OutFile install.ps1
-$env:CODEX_OVERLEAF_REF='v2.3.6'
+iwr https://raw.githubusercontent.com/Ghqqqq/codex-overleaf-link/v2.4.0/install.ps1 -OutFile install.ps1
+$env:CODEX_OVERLEAF_REF='v2.4.0'
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
 随后打开 `chrome://extensions`，启用 **Developer mode（开发者模式）**，点击 **Load unpacked（加载已解压的扩展程序）**，选择安装器打印的扩展目录。如果安装器提示路径已复制，可将其粘贴到目录选择器中。
 
-### 方式 B：npm 托管安装
+### 方式 C：npm 托管安装
 
 `npm exec` 会安装相同的托管 Native Host 和扩展运行时，无需保留源码检出目录。适合希望固定 npm 包版本的安装方式。
 
@@ -381,7 +395,7 @@ npm run smoke:extension -- --url 'https://www.overleaf.com/project/<project-id>'
 Linux Chromium 安装或更新：
 
 ```bash
-CODEX_OVERLEAF_REF=v2.3.6 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Ghqqqq/codex-overleaf-link/v2.3.6/install.sh)" -- --browser chromium
+CODEX_OVERLEAF_REF=v2.4.0 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Ghqqqq/codex-overleaf-link/v2.4.0/install.sh)" -- --browser chromium
 ```
 
 Linux Chromium 卸载：
@@ -414,14 +428,14 @@ npm exec --yes codex-overleaf-link@2.4.0 -- install-native --extension-id "<your
 
 ## GitHub Release 制品
 
-v2.3.6 的 GitHub Release 包含：
+v2.4.0 的 GitHub Release 包含：
 
-- `codex-overleaf-link-extension-v2.3.6.zip`：用于手动加载已解压扩展的 Chrome 扩展包。
-- `codex-overleaf-native-host-v2.3.6.tar.gz`：供安装器和发布验证使用的 Native Host 运行时文件。
-- `codex-overleaf-update-v2.3.6.tar.gz`：托管更新器使用的扩展 / Native Host 配套更新包。
+- `codex-overleaf-link-extension-v2.4.0.zip`：用于手动加载已解压扩展的 Chrome 扩展包。
+- `codex-overleaf-native-host-v2.4.0.tar.gz`：供安装器和发布验证使用的 Native Host 运行时文件。
+- `codex-overleaf-update-v2.4.0.tar.gz`：托管更新器使用的扩展 / Native Host 配套更新包。
 - `codex-overleaf-link-2.4.0.tgz`：提供固定版本安装、doctor 诊断和卸载流程的 npm CLI 包。
-- `install.sh`：固定发布版本的 macOS / Linux 安装脚本，从 Release 制品直接运行时默认使用 `v2.3.6`。
-- `install.ps1`：固定发布版本的 Windows PowerShell 安装脚本，从 Release 制品直接运行时默认使用 `v2.3.6`。
+- `install.sh`：固定发布版本的 macOS / Linux 安装脚本，从 Release 制品直接运行时默认使用 `v2.4.0`。
+- `install.ps1`：固定发布版本的 Windows PowerShell 安装脚本，从 Release 制品直接运行时默认使用 `v2.4.0`。
 - `uninstall-native-host.mjs`：删除 Chrome Native Messaging 清单、桥接启动程序和运行时副本的卸载脚本。
 - `nativeHostPlatform.js`、`manifest.js`、`runtimeInstaller.js`：独立卸载脚本所需的配套文件。
 - `SHA256SUMS`、`release-manifest.json`、`release-manifest.sig`：校验和、发布元数据及其 Ed25519 签名。
