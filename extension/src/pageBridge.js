@@ -67,7 +67,14 @@
     treeOperations,
     window
   });
+  const textFileCreator = requirePageModule('CodexOverleafTextFileCreator').create({
+    window, document, treeOperations, snapshotRouter,
+    collectElements, ensureEditing, ensureReviewing, readActiveEditorText, readWriteCancellationSequence,
+    uploadHelpers: requirePageModule('CodexOverleafBinaryAssetUploader')
+  });
   binaryAssetUploader = requirePageModule('CodexOverleafBinaryAssetUploader').create({
+    prepareUploadParent: textFileCreator.prepareUploadParent,
+    findFolderNode: textFileCreator.findFolderNode,
     document,
     snapshotRouter,
     treeOperations,
@@ -86,6 +93,8 @@
     window
   });
   writebackRouter = requirePageModule('CodexOverleafWritebackRouter').create({
+    createTextFile: textFileCreator.createFile,
+    deleteTextFile: textFileCreator.deleteFile,
     activeEditorIdentityChanged,
     clickNode,
     collectElements,
@@ -93,8 +102,14 @@
     compileBridge,
     delay,
     diagnosticsRevision: PAGE_BRIDGE_INSTALL_REVISION,
-    ensureEditing,
-    ensureReviewing,
+    getCodeMirrorEditorView,
+    getTrackedChangeDocumentId: filePath => {
+      const ids = new Set(collectDocRecords({ includeWindowGlobals: true })
+        .filter(record => record.path === filePath && typeof record.id === 'string' && record.id).map(record => record.id));
+      return ids.size === 1 ? Array.from(ids)[0] : '';
+    },
+    ensureEditing: params => textFileCreator.ensureWriteMode(false, params),
+    ensureReviewing: params => textFileCreator.ensureWriteMode(true, params),
     // Cross-world cancel: the router's per-op loop polls this each iteration
     // and aborts remaining ops when the value bumps. content-side cancel
     // invokes pageBridge.cancelActiveWrite which calls bumpWriteCancellationSequence.
@@ -205,20 +220,28 @@
       return { ok: true };
     },
     createCheckpoint: params => createCheckpoint(params.label),
-    ensureReviewing,
-    ensureEditing,
-    applyOperations: params => applyOperations(params.operations || [], {
+    ensureReviewing: params => textFileCreator.ensureWriteMode(true, params),
+    ensureEditing: params => textFileCreator.ensureWriteMode(false, params),
+    applyOperations: async params => {
+      if (params.reviewingPolicy === 'no-trace-undo') {
+        const prepared = await textFileCreator.prepareEditor(params);
+        if (prepared.ok !== true) return { applied: [], changedDocument: false,
+          skipped: (params.operations || []).map(operation => ({ operation, result: prepared })) };
+      }
+      return applyOperations(params.operations || [], {
         baseFiles: params.baseFiles || null,
         reviewingPolicy: params.reviewingPolicy || '',
         requireReviewing: params.requireReviewing === true,
         requireEditing: params.requireEditing === true,
         runProjectId: typeof params.runProjectId === 'string' ? params.runProjectId : ''
-      }),
+      });
+    },
     binaryUploadBegin: params => binaryAssetUploader.begin(params),
     binaryUploadAppend: params => binaryAssetUploader.append(params),
     binaryUploadCommit: params => binaryAssetUploader.commit(params),
     binaryUploadAbort: params => binaryAssetUploader.abort(params),
     jumpToPosition,
+    reconcileTrackedChangeCapture: params => writebackRouter.reconcileTrackedChangeCapture(params),
     rejectTrackedChanges,
     acceptTrackedChanges,
     triggerCompile: params => compileBridge.triggerCompile(params),
@@ -430,6 +453,7 @@
       editor,
       capabilities: pageRpcContract.withCapabilityReport(collectPageCapabilities(editor)),
       editorDiagnostics: buildEditorDiagnostics(editor),
+      trackedChangeCapture: writebackRouter.getTrackedChangeCaptureStatus?.(),
       projectDiagnostics: {
         internalRootKeys: collectInternalRootKeys(),
         docRecordCount: docRecords.length,
@@ -559,40 +583,26 @@
         reason: 'jumpToPosition requires a non-empty file path'
       };
     }
-    if (!projectPathExists(filePath)) {
-      return {
-        ok: false,
-        code: 'path_not_found',
-        reason: `Could not find ${filePath} in the Overleaf project`,
-        path: filePath,
-        failure: buildPageBridgeFailure('target_file_not_found', {
-          file: filePath,
-          operationType: 'jump',
-          changedDocument: false,
-          userMessage: `Codex could not find ${filePath} in this Overleaf project.`,
-          evidence: { originalCode: 'path_not_found', writeStarted: false }
-        })
-      };
-    }
-
     const navigating = getActiveFilePath() !== filePath;
     const previousEditorIdentity = navigating ? getActiveEditorIdentity() : null;
 
     if (navigating) {
       const opened = await openFileByPath(filePath);
       if (!opened.ok) {
+        const missing = !projectPathExists(filePath);
+        const code = missing ? 'path_not_found' : 'file_open_failed';
         return {
           ok: false,
-          code: 'file_open_failed',
+          code,
           reason: opened.reason || `Could not open ${filePath}`,
           path: filePath,
-          failure: buildPageBridgeFailure('target_file_open_failed', {
+          failure: buildPageBridgeFailure(missing ? 'target_file_not_found' : 'target_file_open_failed', {
             file: filePath,
             operationType: 'jump',
             changedDocument: false,
             userMessage: `Codex could not open ${filePath} in Overleaf.`,
             technicalMessage: opened.reason || '',
-            evidence: { originalCode: 'file_open_failed', writeStarted: false }
+            evidence: { originalCode: code, writeStarted: false }
           })
         };
       }
@@ -830,10 +840,35 @@
     return current.node !== previous.node;
   }
 
+  function readCurrentEditorMode() {
+    const selector = '.toolbar-editor .review-mode-switcher > .review-mode-switcher-toggle-button';
+    const controls = uniqueNodes(collectElements(selector, 16)).filter(node =>
+      String(node.className || '').split(/\s+/).includes('review-mode-switcher-toggle-button')
+      && node.ownerDocument === document && !isInsideCodexPanel(node));
+    if (!controls.length) return '';
+    const modes = controls.filter(node => {
+      const style = window.getComputedStyle?.(node);
+      return node.isConnected !== false && !node.hidden && !node.closest?.('[hidden],[aria-hidden="true"]')
+        && (node.getClientRects?.().length || 0) > 0 && style?.visibility !== 'hidden'
+        && style?.display !== 'none' && style?.opacity !== '0';
+    }).map(node => {
+      const classes = String(node.className || '').split(/\s+/);
+      const values = [node.getAttribute('aria-label'),
+        node.querySelector?.('.review-mode-switcher-toggle-label')?.textContent]
+        .map(value => normalizeReviewingSignalText(value).toLowerCase())
+        .filter(value => value === 'editing' || value === 'reviewing');
+      for (const mode of ['editing', 'reviewing']) if (classes.includes(mode)) values.push(mode);
+      return values.length && values.every(mode => mode === values[0]) ? values[0] : 'unknown';
+    });
+    return modes.length && modes.every(mode => mode === modes[0]) ? modes[0] : 'unknown';
+  }
+
   function getReviewingState(params = {}) {
     const signals = collectReviewingSignals({ ...params, manualOverride: false });
+    const editorMode = readCurrentEditorMode();
     return {
       signals,
+      ...(editorMode ? { editorMode } : {}),
       reviewing: window.CodexOverleafReviewing.detectReviewingFromSignals(signals)
     };
   }
@@ -986,6 +1021,7 @@
   }
 
   function isReviewingConfirmedForWrite(state = {}) {
+    if (state.editorMode) return state.editorMode === 'reviewing';
     const reviewing = state.reviewing || {};
     if (!reviewing.ok || reviewing.status === 'manual-override') {
       return false;
@@ -1015,6 +1051,7 @@
   }
 
   function isEditingConfirmedForNoTraceUndo(state = {}) {
+    if (state.editorMode) return state.editorMode === 'editing';
     if (isReviewingConfirmedForWrite(state)) {
       return false;
     }

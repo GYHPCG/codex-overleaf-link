@@ -139,8 +139,10 @@
       // recordUndoFromApply classify a successful Track write as legacy Undo,
       // which hides Accept and prevents the lifecycle from surviving reload.
       merged.trackedChanges.push(...(Array.isArray(result?.trackedChanges) ? result.trackedChanges : []));
+      if (result?.trackedChangeCaptures?.length) (merged.trackedChangeCaptures ||= []).push(...result.trackedChangeCaptures);
       if (result?.ok !== true) merged.ok = false;
     }
+    if (merged.trackedChangeCaptures?.some(capture => capture.state !== 'observed')) merged.trackedChanges = [];
     if (merged.skipped.length) merged.ok = false;
     return merged;
   }

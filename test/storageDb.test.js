@@ -1259,3 +1259,78 @@ test('buildSessionRecord redacts secrets and absolute local paths inside canonic
   assert.doesNotMatch(serialized, /\/Users\/alice\/private/);
   assert.equal(record.runs[0].settlement.failures[0].code, 'write_failed');
 });
+
+
+test('IndexedDB preserves the full immutable execution snapshot through repeated recovery', () => {
+  const codec = require('../extension/src/shared/runExecutionSnapshotCodec');
+  const snapshot = codec.normalizeSnapshot({
+    mode: 'auto', providerId: 'saved-provider', providerRevision: '7',
+    model: 'saved-model', reasoningEffort: 'high', speedTier: 'fast',
+    requireReviewing: false, autoRecompile: false,
+    focusFiles: Array.from({ length: 100 }, (_, index) => 'sections/part-' + index + '.tex'),
+    capturedAt: '2026-09-11T00:00:00.000Z', source: 'submitted'
+  });
+  let run = { id: 'run-snapshot', task: 'QA', status: 'completed', executionSnapshot: snapshot };
+  for (let cycle = 0; cycle < 3; cycle++) {
+    const record = buildSessionRecord({ id: 'session-snapshot', projectId: 'example',
+      requireReviewing: true, runs: [run] }, { preserveRunActionPayload: true });
+    run = normalizeRuns(JSON.parse(JSON.stringify(record.runs)), { restoreRunningRuns: true })[0];
+    assert.deepEqual(run.executionSnapshot, snapshot);
+    assert.equal(run.undoOperations.length, 0);
+  }
+});
+
+test('IndexedDB execution snapshots whitelist metadata and redact credential-shaped strings', () => {
+  const credential = 'sk-' + 'a'.repeat(48);
+  const record = buildSessionRecord({ id: 'session-snapshot', projectId: 'example', runs: [{
+    id: 'run-snapshot', status: 'completed', executionSnapshot: {
+      schemaVersion: 1, mode: 'auto', providerId: 'builtin', source: 'submitted',
+      requireReviewing: false, autoRecompile: false, model: credential, focusFiles: ['main.tex'],
+      apiKey: 'PRIVATE_KEY_MUST_NOT_PERSIST', projectContent: 'RAW_PROJECT_MUST_NOT_PERSIST',
+      nested: { secret: 'NESTED_SECRET_MUST_NOT_PERSIST' }
+    }
+  }] });
+  const snapshot = record.runs[0].executionSnapshot;
+  assert.equal(snapshot.requireReviewing, false);
+  assert.equal(snapshot.autoRecompile, false);
+  assert.deepEqual(snapshot.focusFiles, ['main.tex']);
+  const serialized = JSON.stringify(record);
+  for (const forbidden of [credential, 'PRIVATE_KEY_MUST_NOT_PERSIST', 'RAW_PROJECT_MUST_NOT_PERSIST', 'NESTED_SECRET_MUST_NOT_PERSIST']) {
+    assert.equal(serialized.includes(forbidden), false, forbidden);
+  }
+  assert.equal(Object.hasOwn(snapshot, 'apiKey'), false);
+  assert.equal(Object.hasOwn(snapshot, 'nested'), false);
+});
+
+test('IndexedDB never invents execution provenance for legacy or malformed snapshots', () => {
+  const record = buildSessionRecord({ id: 'session-snapshot', projectId: 'example', requireReviewing: false, runs: [
+    { id: 'legacy' }, { id: 'malformed', executionSnapshot: [] },
+    { id: 'partial', executionSnapshot: { requireReviewing: false } },
+    { id: 'inferred', executionSnapshot: { requireReviewing: false, source: 'legacy-inferred' } }
+  ] });
+  assert.equal(Object.hasOwn(record.runs[0], 'executionSnapshot'), false);
+  assert.equal(Object.hasOwn(record.runs[1], 'executionSnapshot'), false);
+  assert.equal(record.runs[2].executionSnapshot.requireReviewing, false);
+  assert.equal(Object.hasOwn(record.runs[2].executionSnapshot, 'source'), false);
+  assert.equal(record.runs[3].executionSnapshot.source, 'legacy-inferred');
+});
+
+test('a Reviewing checkpoint without discovered refs survives two IndexedDB saves', () => {
+  let run = {
+    id: 'capture-pending', status: 'completed',
+    executionSnapshot: { mode: 'auto', requireReviewing: true, source: 'submitted' },
+    appliedOperations: [{ type: 'edit', path: 'main.tex', replaceAll: 'after' }],
+    undoExpectedFiles: [{ path: 'main.tex', content: 'before' }],
+    undoOperations: [], undoBaseFiles: [], undoTrackedChanges: [],
+    trackedChangeCaptures: [{ state: 'pending', path: 'main.tex' }]
+  };
+  for (let cycle = 0; cycle < 2; cycle++) {
+    const record = buildSessionRecord({ id: 'session-capture', projectId: 'example', runs: [run] },
+      { preserveRunActionPayload: true });
+    run = normalizeRuns(JSON.parse(JSON.stringify(record.runs)))[0];
+    assert.equal(run.executionSnapshot?.requireReviewing, true);
+    assert.equal(run.appliedOperations.length, 1);
+    assert.equal(run.undoExpectedFiles.length, 1);
+    assert.equal(run.trackedChangeCaptures.length, 1);
+  }
+});

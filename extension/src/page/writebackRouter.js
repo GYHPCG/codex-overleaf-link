@@ -392,54 +392,45 @@
       : result;
   }
 
-  async function applyOperationsWithNoTraceUndo(operations, options = {}) {
-    const initial = getReviewingState({});
-    if (isEditingConfirmedForNoTraceUndo(initial)) {
-      const result = await applyOperationsCore(operations, options);
-      return {
-        ...result,
-        reviewingPolicy: {
-          policy: 'no-trace-undo',
-          disabled: false,
-          restored: false,
-          reason: 'editing_already_confirmed'
-        }
-      };
-    }
-
-    const disabled = await setReviewingEnabled(false, { waitMs: 1800 });
-    if (!disabled.ok) {
-      return buildNoTraceUndoBlockedResult(operations, disabled);
-    }
-
-    let result;
-    let applyError = null;
-    try {
-      result = await applyOperationsCore(operations, options);
-    } catch (error) {
-      applyError = error;
-    }
-    if (applyError) {
-      throw applyError;
-    }
-
-    return {
-      ...result,
-      reviewingPolicy: {
-        policy: 'no-trace-undo',
-        disabled: true,
-        restored: false,
-        leftEditing: true,
-        reason: 'left_editing_after_undo',
-        disable: summarizeReviewingToggleResult(disabled)
+  async function confirmNoTraceUndoEditing() {
+    let changed = false;
+    let toggle = { ok: true, changed: false, enabled: false };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (!isEditingConfirmedForNoTraceUndo(getReviewingState({}))) {
+        toggle = await setReviewingEnabled(false, { waitMs: 1800 });
+        if (!toggle.ok) return toggle;
+        changed = changed || toggle.changed === true;
       }
-    };
+      await delay(180);
+      if (!isEditingConfirmedForNoTraceUndo(getReviewingState({}))) continue;
+      await delay(180);
+      if (isEditingConfirmedForNoTraceUndo(getReviewingState({})))
+        return { ...toggle, ok: true, changed, enabled: false };
+    }
+    return { ok: false, code: 'editing_not_confirmed',
+      reason: 'Overleaf Editing mode did not remain confirmed before undo; no undo write was started.' };
+  }
+
+  async function applyOperationsWithNoTraceUndo(operations, options = {}) {
+    const disabled = await confirmNoTraceUndoEditing();
+    if (!disabled.ok) return buildNoTraceUndoBlockedResult(operations, disabled);
+    const result = await applyOperationsCore(operations, {
+      ...options, noTraceUndo: true, trackReviewingChanges: false
+    });
+    const reviewingPolicy = { policy: 'no-trace-undo', disabled: disabled.changed === true, restored: false,
+      reason: disabled.changed ? 'left_editing_after_undo' : 'editing_already_confirmed' };
+    if (disabled.changed) {
+      reviewingPolicy.leftEditing = true;
+      reviewingPolicy.disable = summarizeReviewingToggleResult(disabled);
+    }
+    return { ...result, reviewingPolicy };
   }
 
   async function applyOperationsCore(operations, options = {}) {
     const applied = [];
     const skipped = [];
     const trackedChanges = [];
+    const trackedChangeCaptures = [];
     const safeBaseFiles = normalizeBaseFilesForSafety(options.baseFiles);
     const baseFileLookup = window.CodexOverleafStaleGuard?.buildBaseFileLookup(safeBaseFiles);
     const baseBinaryFileLookup = buildBaseBinaryFileLookup(safeBaseFiles);
@@ -574,8 +565,10 @@
       let raceResult;
       if (operation.type === 'edit') {
         raceResult = await raceOpAgainstCancellation(applyEditOperation(operation, {
-          baseFileLookup,
-          trackReviewingChanges: options.trackReviewingChanges === true
+          baseFileLookup, runProjectId,
+          recheckWriteProject: writeGuardSurface ? () => writeGuardSurface.runWriteGuard({ runProjectId }) : null,
+          trackReviewingChanges: options.trackReviewingChanges === true,
+          noTraceUndo: options.noTraceUndo === true
         }));
       } else if (['binary-create', 'overwrite-binary'].includes(operation.type)) {
         raceResult = await raceOpAgainstCancellation(applyBinaryAssetOperation(operation, { baseFileLookup, baseBinaryFileLookup }));
@@ -604,6 +597,7 @@
         break;
       }
       const result = raceResult;
+      if (result.trackedChangeCapture) trackedChangeCaptures.push(result.trackedChangeCapture);
       if (operation.type === 'edit' && result.ok && Array.isArray(result.trackedChanges)) {
         trackedChanges.push(...result.trackedChanges);
       }
@@ -618,7 +612,8 @@
       ok: skipped.length === 0,
       applied,
       skipped,
-      trackedChanges: mergeTrackedChangeRefs(trackedChanges)
+      trackedChanges: trackedChangeCaptures.some(capture => capture.state !== 'observed') ? [] : mergeTrackedChangeRefs(trackedChanges),
+      trackedChangeCaptures
     };
   }
 
@@ -653,12 +648,17 @@
       return editorReady;
     }
 
+    if (options.noTraceUndo === true) {
+      const editing = await confirmNoTraceUndoEditing();
+      if (!editing.ok) return buildNoTraceUndoBlockedResult([operation], editing).skipped[0].result;
+    }
     const trackReviewingChanges = options.trackReviewingChanges === true;
     const forbidTrackedChanges = options.forbidTrackedChanges === true;
     const observeTrackedChanges = trackReviewingChanges || forbidTrackedChanges;
     const operationPaths = collectOperationPaths([operation]);
+    const captureBaseline = trackReviewingChanges ? prepareTrackedChangeCapture(operation.path) : null;
     const trackedBefore = observeTrackedChanges
-      ? collectTrackedChangeRefsForPaths(operationPaths)
+      ? (captureBaseline?.refs || collectTrackedChangeRefsForPaths(operationPaths))
       : [];
     let current = editorReady.text;
     let freshness = window.CodexOverleafStaleGuard?.checkOperationFreshness(
@@ -752,6 +752,25 @@
       };
     }
 
+    if (options.noTraceUndo === true) {
+      const blocked = typeof options.recheckWriteProject === 'function'
+        ? await options.recheckWriteProject()
+        : { ok: false, code: 'editor_project_id_unavailable',
+          failure: buildPageFailure('editor_project_id_unavailable', { file: operation.path,
+            operationType: 'undo', changedDocument: false,
+            userMessage: 'The project identity guard is unavailable; the undo write was not applied.' }) };
+      if (blocked) return blocked.skipped?.[0]?.result || blocked;
+      if (getActiveFilePath() !== operation.path || readActiveEditorText() !== current) {
+        const reason = 'The editor changed while confirming Editing mode; the undo write was not applied.';
+        return { ok: false, code: 'stale_source_changed', reason,
+          failure: buildPageFailure('stale_source_changed', { file: operation.path,
+            operationType: 'undo', changedDocument: false, userMessage: reason }) };
+      }
+      if (!isEditingConfirmedForNoTraceUndo(getReviewingState({})))
+        return buildNoTraceUndoBlockedResult([operation], { ok: false, code: 'editing_not_confirmed',
+          reason: 'Overleaf left Editing mode before the undo write.' }).skipped[0].result;
+    }
+
     const result = Array.isArray(operation.patches) && operation.patches.length
       ? replaceActiveEditorPatches(operation.patches, nextContent)
       : replaceActiveEditorText(nextContent);
@@ -784,6 +803,7 @@
       return decorated;
     }
     const trackedChanges = [];
+    let trackedChangeCapture = null;
     if (observeTrackedChanges) {
       // Overleaf renders review markers asynchronously after the editor text
       // has already changed. A single 120 ms snapshot intermittently missed
@@ -791,10 +811,13 @@
       // Poll both paths: normal Reviewing writes get a shorter capture window,
       // while Accept replay keeps the longer safety window used to prove that
       // it did not create fresh tracked changes.
-      const trackedDiff = await waitForTrackedChangeDiff(trackedBefore, operationPaths, {
-        waitMs: forbidTrackedChanges ? 3600 : 1800,
-        intervalMs: 180
-      });
+      const trackedDiff = trackReviewingChanges
+        ? await captureTrackedWrite({ trackedBefore, captureBaseline, operation, beforeContent: current,
+          postContent: nextContent, runProjectId: options.runProjectId })
+        : await waitForTrackedChangeDiff(trackedBefore, operationPaths, {
+          waitMs: 3600, intervalMs: 180, stopOnFirst: true
+        });
+      trackedChangeCapture = trackedDiff.capture || null;
       trackedChanges.push(...trackedDiff.trackedChanges);
       if (forbidTrackedChanges && trackedChanges.length > 0) {
         return {
@@ -831,6 +854,7 @@
       ...result,
       verified: true,
       verifiedContent: nextContent,
+      trackedChangeCapture,
       trackedChanges: mergeTrackedChangeRefs(trackedChanges)
     };
   }
@@ -1352,6 +1376,8 @@
   }
 
   async function applyFileTreeOperation(operation, options = {}) {
+    const initialProjectId = treeOperations.getProjectId?.();
+    const initialCancellationSequence = readWriteCancellationSequence();
     const freshness = await checkFileTreeOperationFreshness(operation, options.baseFileLookup);
     if (!freshness.ok) {
       return freshness;
@@ -1400,8 +1426,21 @@
       }
     }
 
+    const nativeOperation = { create: deps.createTextFile, delete: deps.deleteTextFile }[operation.type];
+    if (typeof nativeOperation === 'function' && (operation.type === 'delete' || typeof operation.content === 'string')) {
+      const isCurrent = () => Boolean(initialProjectId) && treeOperations.getProjectId?.() === initialProjectId
+        && readWriteCancellationSequence() === initialCancellationSequence;
+      const created = await nativeOperation(operation, { isCurrent, expectedContent: options.baseFileLookup?.get(operation.path) });
+      if (!created.ok) return created;
+      if (!isCurrent() || created.verified !== true || created.verification !== 'overleaf-zip') {
+        return { ...fileTreeVerificationFailed(operation, 'Server receipt is missing or stale.'), changedDocument: true };
+      }
+      recordFileTreeOperationSuccess(operation, options.baseFileLookup);
+      return { ok: true, method: created.method, verified: true };
+    }
     return {
       ok: false,
+      code: 'file_tree_controls_unavailable',
       reason: 'No supported Overleaf file-tree method was detected'
     };
   }
@@ -1847,6 +1886,8 @@
       acceptTrackedChanges,
       rejectTrackedChanges,
       collectTrackedChangeRefsForPaths,
+      prepareTrackedChangeCapture, getTrackedChangeCaptureStatus,
+      captureTrackedWrite, reconcileTrackedChangeCapture,
       waitForTrackedChangeDiff
     } = trackedChangesLifecycleModule.create({
       window,
@@ -1868,6 +1909,9 @@
       buildPageFailure,
       delay,
       getActiveFilePath,
+      getProjectId: () => treeOperations.getProjectId?.() || '',
+      getCodeMirrorEditorView: deps.getCodeMirrorEditorView,
+      getTrackedChangeDocumentId: deps.getTrackedChangeDocumentId,
       getReviewingState,
       isEditorUndoControl,
       isInsideCodexPanel,
@@ -1885,6 +1929,8 @@
 
     return {
       applyOperations: applyOperationsForBridge,
+      getTrackedChangeCaptureStatus,
+      reconcileTrackedChangeCapture,
       rejectTrackedChanges,
       acceptTrackedChanges,
       verifySaveState

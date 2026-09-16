@@ -1,18 +1,19 @@
 (function initStorageDb(root, factory) {
   if (typeof module === 'object' && module.exports) {
     module.exports = factory(require('./storageRunActions'), require('./runInputQueue'),
-      require('./settlementFacts'), require('./storageSessionClaims'));
+      require('./settlementFacts'), require('./storageSessionClaims'), require('./sessionState'));
   } else {
     root.CodexOverleafModuleRegistry.define('StorageDb', [
       'StorageRunActions',
       'RunInputQueue',
       'SettlementFacts',
-      'StorageSessionClaims'
+      'StorageSessionClaims',
+      'SessionState'
     ], factory);
   }
-})(typeof globalThis !== 'undefined' ? globalThis : window, function storageDbFactory(StorageRunActions, RunInputQueue, SettlementFacts, StorageSessionClaims) {
+})(typeof globalThis !== 'undefined' ? globalThis : window, function storageDbFactory(StorageRunActions, RunInputQueue, SettlementFacts, StorageSessionClaims, SessionState) {
   'use strict';
-  if (!StorageRunActions?.compactRunsForStorage || !StorageRunActions?.compactRunActionPayload || !StorageRunActions?.compactProviderSnapshot || !StorageRunActions?.compactStructuredEventValue || !StorageRunActions?.hashString || !RunInputQueue?.compactForStorage || !SettlementFacts?.compactSettlementFacts || !StorageSessionClaims?.createSessionClaimer) {
+  if (!StorageRunActions?.compactRunsForStorage || !StorageRunActions?.compactRunActionPayload || !StorageRunActions?.compactProviderSnapshot || !StorageRunActions?.compactRunExecutionSnapshot || !StorageRunActions?.compactStructuredEventValue || !StorageRunActions?.hashString || !RunInputQueue?.compactForStorage || !SettlementFacts?.compactSettlementFacts || !StorageSessionClaims?.createSessionClaimer) {
     throw new Error('Codex Overleaf storage run-action helpers are unavailable.');
   }
   // IndexedDB versions are monotonic; v2.0 RC profiles have already opened v3.
@@ -279,6 +280,7 @@
       codexThreadId: typeof input.codexThreadId === 'string' ? input.codexThreadId : '',
       status: typeof input.status === 'string' && input.status ? input.status : 'active',
       focusFiles: normalizePathList(input.focusFiles),
+      projectReferenceFiles: SessionState.normalizeProjectReferenceFiles(input.projectReferenceFiles),
       pendingInputs: RunInputQueue.compactForStorage(input.pendingInputs, {
         normalizeField: normalizeTextField,
         normalizeDisplay: normalizeDisplayTextForStorage,
@@ -650,20 +652,15 @@
   }
 
   function compactRunsForStorage(runs, options) {
-    return StorageRunActions.compactRunsForStorage(
-      runs,
-      options,
-      SESSION_STORAGE_LIMITS.maxRunsPerSession,
-      compactRunForStorage
-    );
+    return StorageRunActions.compactRunsForStorage(runs, options, SESSION_STORAGE_LIMITS.maxRunsPerSession, compactRunForStorage);
   }
-
   function compactRunForStorage(run, keepActionPayload) {
     var actionPayload = StorageRunActions.compactRunActionPayload(run, keepActionPayload);
     var compact = {
       id: run.id,
       task: normalizeDisplayTextForStorage(run.task || 'untitled task', SESSION_STORAGE_LIMITS.taskChars),
       mode: typeof run.mode === 'string' ? redactSecretLikeText(run.mode) : '', ...StorageRunActions.compactProviderSnapshot(run),
+      ...StorageRunActions.compactRunExecutionSnapshot(run, function (text) { return normalizeTextField(text, 4096); }),
       model: normalizeTextField(run.model, 80),
       reasoningEffort: typeof run.reasoningEffort === 'string' ? redactSecretLikeText(run.reasoningEffort) : '',
       speedTier: typeof run.speedTier === 'string' ? redactSecretLikeText(run.speedTier) : '',
@@ -679,9 +676,10 @@
       undoBaseFiles: actionPayload.undoBaseFiles,
       undoTrackedChanges: actionPayload.undoTrackedChanges,
       undoExpectedFiles: actionPayload.undoExpectedFiles,
+      ...(actionPayload.trackedChangeCaptures ? { trackedChangeCaptures: actionPayload.trackedChangeCaptures } : {}),
       undoStatus: normalizeDisplayTextForStorage(run.undoStatus, SESSION_STORAGE_LIMITS.statusTextChars),
       nativeRequestId: normalizeTextField(run.nativeRequestId, 160),
-      codexTurnId: normalizeTextField(run.codexTurnId, 160),
+      codexThreadId: normalizeTextField(run.codexThreadId, 160), codexTurnId: normalizeTextField(run.codexTurnId, 160),
       nativeEventSeq: Number.isFinite(Number(run.nativeEventSeq)) ? Number(run.nativeEventSeq) : 0,
       queueItemId: normalizeTextField(run.queueItemId, 160)
     };

@@ -82,6 +82,10 @@ async function handleRequest(request, env = process.env, emit = () => {}) {
     return handleMirrorStatus(request, env);
   }
 
+  if (request.method === 'mirror.invalidate') {
+    return handleMirrorInvalidate(request, env);
+  }
+
   if (request.method === 'mirror.scanSensitive') {
     return handleMirrorScanSensitive(request, env);
   }
@@ -704,6 +708,27 @@ async function handleMirrorConfirmWriteback(request, env) {
     return okResponse(request.id, result);
   } catch (error) {
     return errorResponse(request.id, 'mirror_confirm_writeback_failed', error.message);
+  } finally {
+    releaseProjectLock(projectKey, lockToken);
+  }
+}
+
+function handleMirrorInvalidate(request, env) {
+  const projectId = request.params?.projectId;
+  if (typeof projectId !== 'string' || !projectId.trim()) {
+    return errorResponse(request.id, 'invalid_project_id', 'Mirror invalidation requires an explicit project id.');
+  }
+  const projectKey = resolveProjectKey({ projectId });
+  const lockToken = acquireProjectLock(projectKey);
+  if (!lockToken) {
+    return errorResponse(request.id, 'project_locked', `Project ${projectKey} is currently in use by codex.run`);
+  }
+  try {
+    const { markMirrorDirty } = require('./mirrorWorkspace');
+    markMirrorDirty({ projectId, rootDir: env.CODEX_OVERLEAF_MIRROR_ROOT, reason: 'overleaf_undo' });
+    return okResponse(request.id, { invalidated: true, projectKey });
+  } catch (error) {
+    return errorResponse(request.id, 'mirror_invalidation_failed', error.message);
   } finally {
     releaseProjectLock(projectKey, lockToken);
   }

@@ -46,6 +46,7 @@ if (!globalThis.CodexOverleafUpdateRuntimeIdentity) {
     'mirror.sync',
     'mirror.patchFiles',
     'mirror.confirmWriteback',
+    'mirror.invalidate',
     'mirror.scanSensitive',
     'codex.history.clearPlugin',
     'codex.providers.list',
@@ -228,6 +229,8 @@ if (!globalThis.CodexOverleafUpdateRuntimeIdentity) {
       case 'mirror.patchFiles':
         return 'safe_sync_retry';
       case 'mirror.confirmWriteback':
+        return 'safe_sync_retry';
+      case 'mirror.invalidate':
         return 'safe_sync_retry';
       case 'codex.cancel':
         return 'best_effort';

@@ -1029,11 +1029,21 @@
 }
 
 #codex-overleaf-panel .codex-diagnostics-menu {
-  position: absolute;
+  position: fixed;
   z-index: 2147483647;
-  top: 30px;
-  right: 0;
-  width: 260px;
+  top: 44px;
+  right: 12px;
+  bottom: auto;
+  left: auto;
+  margin: 0;
+  box-sizing: border-box;
+  width: min(300px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+  color: var(--tl-fg-2);
   border: 1px solid var(--tl-border-strong);
   border-radius: 6px;
   background: var(--tl-surface-2);
@@ -1084,13 +1094,28 @@
   z-index: 2147483647;
   top: 44px;
   right: 12px;
-  width: min(316px, calc(var(--codex-overleaf-panel-width) - 24px));
-  max-height: min(520px, calc(100vh - 64px));
+  bottom: auto;
+  left: auto;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  width: min(560px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: min(640px, calc(100vh - 24px));
   overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+  color: var(--tl-fg-2);
   border: 1px solid var(--tl-border-strong);
   border-radius: 8px;
   background: var(--tl-surface-1);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.48);
+}
+
+#codex-overleaf-panel .codex-diagnostics-menu::backdrop,
+#codex-overleaf-panel .codex-diagnostics-result::backdrop {
+  background: transparent;
+  pointer-events: none;
 }
 
 #codex-overleaf-panel .codex-diagnostics-result[hidden] {
@@ -1821,9 +1846,12 @@
 #codex-overleaf-panel .codex-plugin-confirm::backdrop { background: transparent; }
 
 #codex-overleaf-panel .codex-plugin-confirm-card {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
   width: 100%;
   max-height: min(520px, calc(100vh - 28px));
-  overflow: hidden;
+  overflow: auto;
   border: 1px solid var(--tl-border-strong);
   border-radius: 8px;
   background: var(--tl-surface-1);
@@ -1832,6 +1860,7 @@
 
 #codex-overleaf-panel .codex-plugin-confirm-head {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 10px;
   padding: 14px 14px 12px;
@@ -1860,6 +1889,8 @@
 }
 
 #codex-overleaf-panel .codex-plugin-confirm-body {
+  flex: 0 1 auto;
+  min-height: 0;
   max-height: 300px;
   overflow: auto;
   padding: 12px 14px;
@@ -1872,6 +1903,9 @@
 
 #codex-overleaf-panel .codex-plugin-confirm-actions {
   display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: stretch;
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 14px 14px;
@@ -1879,12 +1913,23 @@
 }
 
 #codex-overleaf-panel .codex-plugin-confirm-actions button {
-  min-width: 72px;
-  height: 30px;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: min(72px, 100%);
+  max-width: 100%;
+  min-height: 34px;
+  height: auto;
   border: 1px solid var(--tl-border-strong);
   border-radius: 6px;
-  padding: 0 12px;
+  padding: 7px 12px;
   font-weight: 650;
+  line-height: 1.35;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 #codex-overleaf-panel .codex-plugin-confirm-cancel {

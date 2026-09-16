@@ -107,7 +107,22 @@
       if (!copied) throw new Error('clipboard_copy_failed');
     }
 
-    return Object.freeze({ configureResultActions });
+    return Object.freeze({ configureResultActions, projectUndoAvailability });
+  }
+
+  function projectUndoAvailability(run, projectRunSettlement) {
+    const payload = run.recoveryPayload && typeof run.recoveryPayload === 'object'
+      ? run.recoveryPayload : run;
+    if (!Array.isArray(payload.appliedOperations)) return projectRunSettlement(run);
+    // Forward binary writes do not provide a rollback. Filter them only for
+    // display; preserve the canonical settlement and every real recovery field.
+    const appliedOperations = payload.appliedOperations.filter(operation =>
+      operation?.type !== 'binary-create' && operation?.type !== 'overwrite-binary');
+    if (appliedOperations.length === payload.appliedOperations.length) return projectRunSettlement(run);
+    return projectRunSettlement({
+      ...run,
+      recoveryPayload: { ...payload, appliedOperations }
+    });
   }
 
   return Object.freeze({ create });

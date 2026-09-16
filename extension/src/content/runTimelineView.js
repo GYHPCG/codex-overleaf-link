@@ -932,7 +932,7 @@
       return;
     }
 
-    const projection = projectRunSettlement(run);
+    const projection = RunResultActions.projectUndoAvailability(run, projectRunSettlement);
     if (!projection.canUndo && run.undoStatus !== 'applied') {
       button.hidden = true;
       return;

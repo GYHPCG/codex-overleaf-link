@@ -36,6 +36,7 @@
         size,
         sha256: String(params.sha256).toLowerCase(),
         mimeType: String(params.mimeType || 'application/octet-stream'),
+        projectId: treeOperations.getProjectId(),
         overwrite: params.overwrite === true,
         chunks: [],
         received: 0
@@ -66,6 +67,7 @@
       const transfer = transfers.get(transferId);
       if (!transfer) return failure('binary_upload_transfer_missing', 'Asset upload transfer was not found.');
       try {
+        assertTransferProject(transfer);
         if (transfer.received !== transfer.size) return failure('binary_upload_incomplete', 'Asset upload is incomplete.');
         const bytes = joinChunks(transfer.chunks, transfer.size);
         const digest = await sha256Hex(bytes, windowRef.crypto);
@@ -84,9 +86,12 @@
         const errors = [];
         for (const attempt of attempts) {
           try {
+            assertTransferProject(transfer);
             const result = await attempt();
-            const observed = result?.ok ? await waitForPath(transfer.path, 12000) : null;
-            const hashVerified = observed ? await verifyRemoteHash(observed, transfer).catch(() => false) : false;
+            const evidence = result?.ok ? await waitForPath(transfer, result, 12000) : null;
+            const observed = evidence?.observed;
+            const hashVerified = evidence?.hashVerified === true;
+            assertTransferProject(transfer);
             const overwriteVerified = !transfer.overwrite || hashVerified || result?.confirmedByTransport === true;
             if (result?.ok && observed && overwriteVerified) {
               return { ok: true, written: true, path: transfer.path, method: result.method, changedDocument: true };
@@ -97,7 +102,8 @@
             errors.push(error.message);
           }
         }
-        return failure('binary_upload_unavailable', errors.filter(Boolean).join('; ') || 'No supported Overleaf asset upload path succeeded.');
+        return { ...failure('binary_upload_unavailable', errors.filter(Boolean).join('; ') || 'No supported Overleaf asset upload path succeeded.'),
+          changedDocument: transfer.mutationAttempted === true };
       } finally {
         transfers.delete(transferId);
       }
@@ -105,6 +111,13 @@
 
     function abort(params = {}) {
       return { ok: true, aborted: transfers.delete(String(params.transferId || '')) };
+    }
+
+    function assertTransferProject(transfer) {
+      if (transfers.get(transfer.id) !== transfer) throw new Error('Asset upload was cancelled or replaced.');
+      if (!transfer.projectId || treeOperations.getProjectId() !== transfer.projectId) {
+        throw new Error('Project changed during asset upload.');
+      }
     }
 
     async function uploadWithMultipart(file, transfer) {
@@ -120,6 +133,7 @@
       const csrf = findCsrfToken();
       const headers = csrf ? { 'X-CSRF-Token': csrf } : {};
       const query = folderId ? `?folder_id=${encodeURIComponent(folderId)}` : '';
+      assertTransferProject(transfer);
       const response = await windowRef.fetch(`/project/${encodeURIComponent(projectId)}/upload${query}`, {
         method: 'POST', body: form, credentials: 'same-origin', headers
       });
@@ -143,11 +157,16 @@
     async function uploadWithDom(file, transfer) {
       const parentPath = transfer.path.split('/').slice(0, -1).join('/');
       if (parentPath) {
-        const folderNode = treeOperations.findFileTreeNode(parentPath);
-        if (!folderNode) return { ok: false, reason: `Target folder ${parentPath} is unavailable in the Overleaf file tree.` };
-        folderNode?.dispatchEvent(new windowRef.MouseEvent('click', { bubbles: true }));
-        await delay(120);
+        if (typeof deps.prepareUploadParent !== 'function') {
+          return { ok: false, reason: 'Verified folder selection is unavailable for nested asset upload.' };
+        }
+        await deps.prepareUploadParent(parentPath, {
+          createMissing: true,
+          onMutation: () => { transfer.mutationAttempted = true; },
+          isCurrent: () => treeOperations.getProjectId() === transfer.projectId && transfers.get(transfer.id) === transfer
+        });
       }
+      assertTransferProject(transfer);
       let input = findFileInput();
       if (!input) {
         const button = findUploadButton();
@@ -158,10 +177,12 @@
       if (!input) return { ok: false, reason: 'Overleaf upload file input was not found.' };
       const data = new windowRef.DataTransfer();
       data.items.add(file);
+      assertTransferProject(transfer);
       assignFilesToInput(input, data.files, windowRef);
+      transfer.mutationAttempted = true;
       input.dispatchEvent(new windowRef.Event('input', { bubbles: true }));
       input.dispatchEvent(new windowRef.Event('change', { bubbles: true }));
-      await clickReplaceIfShown();
+      await clickReplaceIfShown(transfer);
       return { ok: true, method: 'overleaf.file-input' };
     }
 
@@ -179,9 +200,9 @@
     }
 
     async function findFolderId(parentPath) {
-      const node = parentPath ? treeOperations.findFileTreeNode(parentPath) : null;
-      const element = node?.closest?.('[data-entity-id], [data-folder-id], [data-id]') || node;
-      const domId = element?.dataset?.entityId || element?.dataset?.folderId || element?.dataset?.id;
+      const node = parentPath ? (deps.findFolderNode?.(parentPath)
+        || findNativeTreeNode(parentPath, 'folder') || treeOperations.findFileTreeNode(parentPath)) : null;
+      const domId = readTreeEntityId(node);
       if (domId) return domId;
       for (const root of [windowRef._ide, windowRef.Overleaf, windowRef.overleaf, windowRef.OL]) {
         const folder = root?.project?.rootFolder?.[0] || root?.project?.rootFolder || root?.rootFolder?.[0] || root?.rootFolder;
@@ -223,31 +244,82 @@
       }
       return null;
     }
-    async function clickReplaceIfShown() {
+    async function clickReplaceIfShown(transfer) {
       await delay(180);
-      const button = Array.from(documentRef.querySelectorAll('button')).find(node => /replace|overwrite|替换|覆盖/i.test(node.textContent || ''));
+      assertTransferProject(transfer);
+      if (!transfer.overwrite) return;
+      const button = Array.from(documentRef.querySelectorAll('[role="dialog"] button')).find(node => !isCodexOwnedNode(node)
+        && /replace|overwrite|替换|覆盖/i.test(node.textContent || ''));
       if (button) button.click();
     }
-    async function waitForPath(projectPath, timeoutMs) {
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        if (treeOperations.projectPathExists(projectPath)) {
-          const node = treeOperations.findFileTreeNode(projectPath);
-          return {
-            path: projectPath,
-            id: node?.dataset?.entityId || node?.dataset?.fileId || node?.dataset?.id || ''
-          };
-        }
-        await delay(250);
-        try {
-          const list = await snapshotRouter?.buildProjectFileList({
-            force: true, maxAgeMs: 0, preferLightweight: true, allowZipFallback: false
-          });
-          const file = (list?.files || []).find(item => item.path === projectPath);
-          if (file) return file;
-        } catch (_error) { /* continue until the deadline */ }
+    function readTreeEntityId(node) {
+      const owner = node?.closest?.('[data-entity-id], [data-file-id], [data-folder-id], [data-id]');
+      const row = node?.closest?.('[role="treeitem"]') || node;
+      const entity = row?.querySelector?.(':scope > .entity[data-file-id]');
+      for (const candidate of [node, entity, owner]) {
+        const id = candidate?.dataset?.entityId || candidate?.dataset?.fileId
+          || candidate?.dataset?.folderId || candidate?.dataset?.id;
+        if (id) return id;
+      }
+      return '';
+    }
+    function findNativeTreeNode(projectPath, type) {
+      const root = documentRef.querySelector?.('[data-testid="file-tree-list-root"]');
+      for (const row of root?.querySelectorAll?.('[role="treeitem"]') || []) {
+        const entity = row.querySelector?.(':scope > .entity[data-file-id]');
+        if (entity?.dataset?.fileType === type && readNativeTreePath(row, root) === projectPath) return row;
       }
       return null;
+    }
+    function readNativeTreePath(row, root) {
+      const parts = [row.getAttribute('aria-label')];
+      let group = row.closest('[role="tree"]');
+      const seen = new Set();
+      while (group && group !== root) {
+        if (seen.has(group) || seen.size >= 64) return '';
+        seen.add(group);
+        const folder = group.previousElementSibling;
+        const entity = folder?.querySelector?.(':scope > .entity[data-file-id]');
+        if (folder?.getAttribute?.('role') !== 'treeitem' || entity?.dataset?.fileType !== 'folder') return '';
+        parts.unshift(folder.getAttribute('aria-label'));
+        group = group.parentElement?.closest?.('[role="tree"]');
+      }
+      if (group !== root || parts.some(part => !part || /[/\\]/.test(part))) return '';
+      return parts.join('/');
+    }
+    async function waitForPath(transfer, result, timeoutMs) {
+      const projectPath = transfer.path;
+      const deadline = Date.now() + timeoutMs;
+      let lastObserved = null;
+      while (Date.now() < deadline) {
+        assertTransferProject(transfer);
+        const node = findNativeTreeNode(projectPath, 'file')
+          || treeOperations.findFileTreeNode(projectPath, { invalidateCache: true });
+        let observed = node || treeOperations.projectPathExists(projectPath)
+          ? { path: projectPath, id: readTreeEntityId(node) } : null;
+        if (!observed?.id) {
+          try {
+            const list = await snapshotRouter?.buildProjectFileList({
+              force: true, maxAgeMs: 0, preferLightweight: true, allowZipFallback: false
+            });
+            const file = (list?.files || []).find(item => item.path === projectPath);
+            if (file) observed = file;
+          } catch (_error) { /* continue until the deadline */ }
+        }
+        assertTransferProject(transfer);
+        if (observed) {
+          lastObserved = observed;
+          const hashVerified = await verifyRemoteHash(observed, transfer).catch(() => false);
+          assertTransferProject(transfer);
+          // An existing path is not replacement evidence. Re-read identity and
+          // bytes while the native uploader and file-tree events settle.
+          if (!transfer.overwrite || hashVerified || result.confirmedByTransport === true) {
+            return { observed, hashVerified };
+          }
+        }
+        await delay(250);
+      }
+      return { observed: lastObserved, hashVerified: false };
     }
     async function verifyRemoteHash(observed, transfer) {
       const fileId = observed?.id || observed?._id || observed?.entityId || observed?.fileId || '';
@@ -339,5 +411,5 @@
     return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
   }
   function failure(code, reason) { return { ok: false, code, reason, changedDocument: false }; }
-  return { chooseOverleafFileInput, create, formatUploadHttpError, joinChunks, normalizePath };
+  return { assignFilesToInput, chooseOverleafFileInput, create, formatUploadHttpError, joinChunks, normalizePath };
 });

@@ -56,9 +56,10 @@ test('composer preserves user model changes made while native discovery is pendi
   assert.notEqual(awaitIndex, -1, 'loadModelOptions should await native discovery');
   assert.notEqual(currentSelectionIndex, -1, 'loadModelOptions should re-read selection after discovery returns');
   assert.equal(awaitIndex < currentSelectionIndex, true, 'selection must be re-read after await');
-  assert.match(loadModelOptions, /const retainedSelectedModel = retainSelectedModel\(sourceModels, currentSelectedModel\)/);
+  assert.match(loadModelOptions, /const retainedSelectedModel = retainSelectedModel\(sourceModels, currentSelectedModel,\s*\{\s*preserveUnavailable:\s*preserveBuiltin\s*\}\)/);
+  assert.match(loadModelOptions, /const preserveBuiltin = \(selection\?\.providerId \|\| 'builtin'\) === 'builtin' && \(getState\(\)\?\.providerId \|\| 'builtin'\) === 'builtin'/);
   assert.match(loadModelOptions, /normalizeDiscoveredModels\(\{\s*models:\s*sourceModels,\s*selectedModel:\s*retainedSelectedModel\s*\}\)/);
-  assert.match(loadModelOptions, /renderModelOptions\(normalized\.models,\s*retainedSelectedModel,\s*\{\s*allowUnknownSelected:\s*false\s*\}\)/);
+  assert.match(loadModelOptions, /renderModelOptions\(renderedModels,\s*retainedSelectedModel,\s*\{\s*allowUnknownSelected:\s*false\s*\}\)/);
 });
 
 test('composer preserves a custom selected model before async discovery finishes', () => {

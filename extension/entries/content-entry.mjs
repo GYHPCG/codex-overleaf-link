@@ -96,6 +96,7 @@ import '../src/content/projectSessionCleanup.js';
 import '../src/content/recentProjects.js';
 import '../src/content/otWarmMirror.js';
 import '../src/content/writebackOrchestrator.js';
+import '../src/content/trackedChangeCaptureController.js';
 import '../src/content/runSettlementPersistence.js';
 import '../src/content/postNavigationSettlementPersistence.js';
 import '../src/content/panelMaintenance.js';

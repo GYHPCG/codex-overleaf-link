@@ -636,7 +636,7 @@
       undoExpectedFiles: normalizeRunFiles(run.undoExpectedFiles),
       undoStatus: sanitizeAssistantVisibleText(run.undoStatus),
       nativeRequestId: sanitizeAssistantVisibleText(run.nativeRequestId),
-      codexTurnId: sanitizeAssistantVisibleText(run.codexTurnId),
+      codexThreadId: sanitizeAssistantVisibleText(run.codexThreadId), codexTurnId: sanitizeAssistantVisibleText(run.codexTurnId),
       forkSnapshot: run.forkSnapshot === true,
       forkSourceRunId: sanitizeAssistantVisibleText(run.forkSourceRunId),
       nativeEventSeq: Number.isFinite(Number(run.nativeEventSeq)) ? Number(run.nativeEventSeq) : 0,
@@ -655,6 +655,9 @@
     }
     if (run.changedDocument === true) {
       normalized.changedDocument = true;
+    }
+    if (Array.isArray(run.trackedChangeCaptures) && run.trackedChangeCaptures.length && !run.forkSnapshot) {
+      normalized.trackedChangeCaptures = sanitizeAssistantVisibleValue(run.trackedChangeCaptures);
     }
     applyTrackedChangeStatus(normalized, run.trackedChangeStatus);
 
@@ -1215,7 +1218,7 @@
       undoExpectedFiles: undoPayload.undoExpectedFiles,
       undoStatus: summarizeTextForStorage(run.undoStatus, 'undo status'),
       nativeRequestId: normalizeTextField(run.nativeRequestId, 160),
-      codexTurnId: normalizeTextField(run.codexTurnId, 160),
+      codexThreadId: normalizeTextField(run.codexThreadId, 160), codexTurnId: normalizeTextField(run.codexTurnId, 160),
       forkSnapshot: run.forkSnapshot === true,
       forkSourceRunId: normalizeTextField(run.forkSourceRunId, 160),
       nativeEventSeq: Number.isFinite(Number(run.nativeEventSeq)) ? Number(run.nativeEventSeq) : 0,
@@ -1627,6 +1630,7 @@
     setActiveSession,
     updateActiveSession,
     normalizeRuns,
+    normalizeProjectReferenceFiles,
     prepareStateForStorage,
     estimateJsonBytes,
     computeSafeTaskSummary

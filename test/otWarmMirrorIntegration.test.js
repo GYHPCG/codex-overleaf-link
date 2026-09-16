@@ -64,6 +64,24 @@ test('OT startup accepts the actual JSON page-bridge response and starts polling
   assert.equal(timers.size, 0);
 });
 
+test('a delayed initial file identity becomes observable without a phantom edit', async () => {
+  const fixture = createHarness();
+  fixture.setActivePath('');
+  await fixture.mirror.syncOtWarmMirrorController();
+  assert.equal(fixture.mirror.getCurrentOtStatus(), 'starting');
+  assert.equal(fixture.mirror.getOtWarmMirrorState().failureActive, true);
+  assert.equal(fixture.observer.getStatus().running, true);
+  assert.equal(fixture.observer.getStatus().baselineByteCount, 0);
+  fixture.setActivePath('main.tex');
+  await fixture.runTimer(0);
+  await fixture.runTimer(1000);
+  assert.equal(fixture.mirror.getCurrentOtStatus(), 'observing');
+  assert.equal(fixture.mirror.getOtWarmMirrorState().failureActive, false);
+  assert.equal(fixture.observer.getStatus().queuedEventCount, 0);
+  await fixture.mirror.pauseOtWarmMirror();
+  assert.equal(fixture.timers.size, 0);
+});
+
 test('an unavailable editor read cannot become an empty-file OT deletion', () => {
   const { observer, listeners, setContent } = createHarness();
   observer.start();
@@ -232,16 +250,84 @@ test('plugin composer input does not scan the Overleaf editor', () => {
   assert.equal(reads, before);
 });
 
-test('failed startup stops the page observer and retains a metadata-only failure', async () => {
+test('failed startup stops observation without clearing the user opt-in', async () => {
   const fixture = createHarness();
   fixture.setContent(undefined);
   await fixture.mirror.syncOtWarmMirrorController();
   assert.equal(fixture.observer.getStatus().running, false);
   assert.equal(fixture.listeners.has('input'), false);
-  assert.equal(fixture.mirror.isExperimentalOtEnabled(), false);
+  assert.equal(fixture.mirror.isExperimentalOtEnabled(), true);
   assert.equal(fixture.mirror.getOtWarmMirrorState().failureActive, true);
   assert.equal(fixture.mirror.getOtWarmMirrorState().lastFailure.code, 'missing_editor_content');
   assert.equal(fixture.mirror.getOtWarmMirrorState().lastFailure.phase, 'start');
+});
+
+test('startup failure preserves the preference across reload and observation can recover', async () => {
+  let persisted = { experimentalOtByProject: { example: true } };
+  let failureSaves = 0;
+  const preferences = {
+    getState: () => persisted,
+    setState: next => { persisted = JSON.parse(JSON.stringify(next)); },
+    saveStateSoon: () => { failureSaves += 1; }
+  };
+  const cold = createHarness(preferences);
+  cold.setContent(undefined);
+  await cold.mirror.syncOtWarmMirrorController();
+  assert.equal(persisted.experimentalOtByProject.example, true);
+  assert.equal(failureSaves, 0, 'runtime failure must not persist a preference change');
+  assert.equal(cold.mirror.getOtWarmMirrorState().suspended, true);
+  assert.equal(cold.timers.size, 1, 'a bounded cold-start retry is scheduled');
+  cold.setContent('Editor ready');
+  await cold.runTimer(1000);
+  assert.equal(cold.mirror.getCurrentOtStatus(), 'observing');
+  await cold.mirror.pauseOtWarmMirror();
+  assert.equal(cold.timers.size, 0);
+
+  const reloaded = createHarness(preferences);
+  await reloaded.mirror.syncOtWarmMirrorController();
+  assert.equal(reloaded.mirror.getCurrentOtStatus(), 'observing');
+  assert.equal(reloaded.mirror.getOtWarmMirrorState().failureActive, false);
+  await reloaded.mirror.pauseOtWarmMirror();
+
+  reloaded.mirror.setExperimentalOtEnabledForProject('example', false);
+  const disabled = createHarness(preferences);
+  await disabled.mirror.syncOtWarmMirrorController();
+  assert.equal(disabled.mirror.isExperimentalOtEnabled(), false);
+  assert.equal(disabled.mirror.getCurrentOtStatus(), 'off');
+  assert.equal(disabled.timers.size, 0);
+});
+
+test('cold-start retries stop after the configured attempts without changing opt-in', async () => {
+  const fixture = createHarness();
+  fixture.setContent(undefined);
+  await fixture.mirror.syncOtWarmMirrorController();
+  for (const delay of [1000, 3000, 6000]) await fixture.runTimer(delay);
+  assert.equal(fixture.timers.size, 0);
+  assert.equal(fixture.mirror.getCurrentOtStatus(), 'unavailable');
+  assert.equal(fixture.mirror.isExperimentalOtEnabled(), true);
+});
+
+test('disabling OT clears the pending cold-start retry', async () => {
+  const fixture = createHarness();
+  fixture.setContent(undefined);
+  await fixture.mirror.syncOtWarmMirrorController();
+  fixture.mirror.setExperimentalOtEnabledForProject('example', false);
+  await fixture.mirror.syncOtWarmMirrorController();
+  assert.equal(fixture.timers.size, 0);
+  assert.equal(fixture.mirror.getCurrentOtStatus(), 'off');
+});
+
+test('an obsolete retry cannot replace the next project observation', async () => {
+  const fixture = createHarness();
+  fixture.setContent(undefined);
+  await fixture.mirror.syncOtWarmMirrorController();
+  const staleRetry = Array.from(fixture.timers.values())[0].callback;
+  fixture.setProject('second'); fixture.setContent('ready');
+  await fixture.mirror.syncOtWarmMirrorController();
+  staleRetry();
+  await new Promise(setImmediate);
+  assert.equal(fixture.mirror.getCurrentOtStatus(), 'observing');
+  await fixture.mirror.pauseOtWarmMirror();
 });
 
 test('bridge failure details cannot retain source text in OT diagnostic state', async () => {

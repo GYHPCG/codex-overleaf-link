@@ -1,5 +1,30 @@
 # Changelog
 
+## v2.4.0 - 2026-09-16
+
+### Changed
+
+- Add a fast regression profile and a managed Chrome preparation command while retaining the full release test suite.
+- Expose an executed content-build fingerprint so same-version local rebuilds can be distinguished from stale browser runtimes.
+- Provide English and Simplified Chinese README navigation with aligned installation and troubleshooting guidance.
+
+### Fixed
+
+- Invalidate the project mirror after Undo and wait for that invalidation before the next run, preventing reuse of pre-Undo content after history restoration.
+- Preserve compatibility evidence for mirror invalidation and allow post-Undo cache bookkeeping after an ended run is cancelled, without weakening execution cancellation.
+- Improve native file-tree targeting for text creation and binary assets, including missing parent folders, project/cancellation guards, and remote-byte verification for replacements.
+- Hide unavailable Undo actions for asset-only runs while preserving text recovery and existing Accept/Undo decisions.
+- Preserve tracked-write evidence, saved model selections, and file-reference inventory across the relevant persistence and recovery paths.
+- Keep diagnostic menus outside narrow panel clipping and allow long confirmation actions to remain readable.
+- Store each run's original Codex thread and turn together so historical-node Fork remains valid after provider switches and reloads; surface failed fork requests instead of silently swallowing them.
+- Handle legacy fork records with missing turn identity without dispatching invalid native requests.
+- Include both English and Simplified Chinese README files in npm release tarballs and verify them in the existing artifact regression.
+
+### Compatibility
+
+- Keep the existing Bootstrap protocol and managed-update boundary. No new permissions or runtime dependencies are introduced.
+- Older turns whose original thread identity was never stored may remain unavailable for Fork. These records now show explicit guidance; their origin is not guessed and existing history is not rewritten.
+
 ## v2.3.6 - 2026-09-08
 
 ### Changed

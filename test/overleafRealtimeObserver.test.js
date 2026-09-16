@@ -352,17 +352,22 @@ test('invalid observed timestamps fall back to Date.now without throwing', () =>
   }
 });
 
-test('missing active path reports unavailable status with a stable reason', () => {
+test('missing active path waits for a baseline without claiming readiness', () => {
   const harness = createHarness({ activePath: '' });
 
   const status = harness.observer.start({ projectId: 'project-123' });
 
-  assert.equal(status.status, 'unavailable');
-  assert.equal(status.state, 'unavailable');
+  assert.equal(status.status, 'starting');
+  assert.equal(status.state, 'starting');
   assert.equal(status.running, true);
   assert.equal(status.reason, 'missing_active_path');
   assert.equal(status.lastErrorCode, 'missing_active_path');
   assert.equal(status.activePath, '');
+  assert.equal(status.baselineByteCount, 0);
+  harness.setActivePath('main.tex');
+  assert.deepEqual(harness.observer.drainEvents(), []);
+  assert.equal(harness.observer.getStatus().state, 'observing');
+  assert.equal(harness.dispatchCount, 0);
 });
 
 test('missing document reports unavailable status without running', () => {

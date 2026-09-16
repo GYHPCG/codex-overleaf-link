@@ -14,6 +14,7 @@ const pageBridgeSource = fs.readFileSync(
   path.join(__dirname, '../extension/src/pageBridge.js'),
   'utf8'
 );
+const textFileCreatorSource = fs.readFileSync(path.join(__dirname, '../extension/src/page/textFileCreator.js'), 'utf8');
 const binaryAssetUploaderSource = fs.readFileSync(
   path.join(__dirname, '../extension/src/page/binaryAssetUploader.js'),
   'utf8'
@@ -58,6 +59,7 @@ const writeGuardSource = fs.readFileSync(
   path.join(__dirname, '../extension/src/page/writeGuard.js'),
   'utf8'
 );
+const trackedChangeCaptureSource = fs.readFileSync(path.join(__dirname, '../extension/src/page/trackedChangeCapture.js'), 'utf8');
 const trackedChangesLifecycleSource = fs.readFileSync(
   path.join(__dirname, '../extension/src/page/trackedChangesLifecycle.js'),
   'utf8'
@@ -197,8 +199,10 @@ function createMinimalPageBridgeHarness({ activePath, files }) {
   vm.runInContext(treeOperationsSource, context, { filename: 'treeOperations.js' });
   vm.runInContext(snapshotRouterSource, context, { filename: 'snapshotRouter.js' });
   vm.runInContext(binaryAssetUploaderSource, context, { filename: 'binaryAssetUploader.js' });
+  vm.runInContext(textFileCreatorSource, context, { filename: 'textFileCreator.js' });
   vm.runInContext(overleafProjectSnapshotSource, context, { filename: 'overleafProjectSnapshot.js' });
   vm.runInContext(writeGuardSource, context, { filename: 'writeGuard.js' });
+  vm.runInContext(trackedChangeCaptureSource, context, { filename: 'trackedChangeCapture.js' });
   vm.runInContext(trackedChangesLifecycleSource, context, { filename: 'trackedChangesLifecycle.js' });
   vm.runInContext(writebackRouterSource, context, { filename: 'writebackRouter.js' });
   vm.runInContext(pageBridgeCapabilitySource, context, { filename: 'pageBridgeCapability.js' });

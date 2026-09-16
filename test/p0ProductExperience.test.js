@@ -4173,7 +4173,7 @@ test('saveState merges latest lightweight prefs before saving project-scoped set
   assert.deepEqual(harness.getSavedPrefs().codexOverleafSkillEnabled, { 'venue-style': false });
 });
 
-test('experimental OT sync ignores stale responses and reverts failed starts to default off', () => {
+test('experimental OT sync ignores stale responses and preserves opt-in after failed starts', () => {
   const contentScript = getContentScriptSource();
   const syncBody = contentScript.match(/async function syncOtWarmMirrorController\(\) \{[\s\S]*?\n  \}/)?.[0] || '';
   const failBody = extractFromContentScript('handleFailedOtStart');
@@ -4189,10 +4189,13 @@ test('experimental OT sync ignores stale responses and reverts failed starts to 
   assert.match(syncBody, /handleStaleOtStartResponse\(projectId,\s*requestId\)/);
   assert.match(syncBody, /isSuccessfulOtBridgeResponse\(response\)/);
   assert.match(syncBody, /handleFailedOtStart\(projectId,\s*requestId,\s*response\)/);
-  assert.match(failBody, /setExperimentalOtEnabledForProject\(projectId,\s*false\)/);
-  assert.match(failBody, /experimentalOtCheckbox\.checked = false/);
+  assert.doesNotMatch(failBody, /setExperimentalOtEnabledForProject\(/);
+  assert.doesNotMatch(failBody, /experimentalOtCheckbox\.checked = false/);
+  assert.match(failBody, /updateExperimentalOtToggleControl\(isExperimentalOtEnabledForProject\(projectId\)\)/);
+  assert.match(failBody, /otWarmMirrorState\.suspended = true/);
+  assert.match(failBody, /recordOtFailure\(/);
   assert.match(failBody, /updateOtStatusDisplay\('unavailable'\)/);
-  assert.match(failBody, /saveStateSoon\(\)/);
+  assert.match(failBody, /callPageBridge\('stopOtObserver',\s*\{\s*projectId\s*\}\)/);
   assert.match(projectChangeBody, /otWarmMirrorProjectId = projectId/);
   assert.match(projectChangeBody, /syncExperimentalOtToggleForProject\(projectId\)/);
   assert.match(projectChangeBody, /otSyncRequestId\+\+/);

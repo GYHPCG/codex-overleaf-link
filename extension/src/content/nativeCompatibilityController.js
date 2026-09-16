@@ -23,7 +23,10 @@
     async function dispatch(payload, channelMethod) {
       const compatibilityGate = await ensureForMethod(payload?.method);
       if (!compatibilityGate.ok) return compatibilityGate.response;
-      if (gatedMethods.has(payload?.method)) options.throwIfCancellationRequested?.();
+      // Post-Undo cache bookkeeping must survive the ended run's cancellation.
+      if (gatedMethods.has(payload?.method) && payload.method !== 'mirror.invalidate') {
+        options.throwIfCancellationRequested?.();
+      }
       return nativeChannel[channelMethod](
         attachEvidence(payload, compatibilityGate.compatibility)
       );

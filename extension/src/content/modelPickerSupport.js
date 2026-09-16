@@ -29,12 +29,47 @@
     return String(label || '').replace(/^gpt[-\s]*/i, '');
   }
 
-  function retainSelectedModel(models, selectedModel) {
+  function retainSelectedModel(models, selectedModel, options = {}) {
     const selectedId = normalizeModelOptionId(selectedModel);
     if (!selectedId) return '';
+    if (options.preserveUnavailable === true) return selectedId;
     return (Array.isArray(models) ? models : []).some(model => (
       normalizeModelOptionId(typeof model === 'string' ? model : model?.id) === selectedId
     )) ? selectedId : '';
+  }
+
+  // A fallback or missing catalog entry cannot revoke an explicit selection.
+  // Keep its saved controls provisional until real capability data arrives.
+  function preserveSelectedCapabilities(models, selectedModel, preferences = {}, provisional = false) {
+    const selectedId = normalizeModelOptionId(selectedModel);
+    const saved = preferences || {};
+    return (Array.isArray(models) ? models : []).map(model => {
+      if (model.id !== selectedId || (!provisional && !model.unverified)) return model;
+      const reasoningEfforts = normalizeReasoningEffortsForSelect([
+        ...(model.reasoningEfforts || []), saved.reasoningEffort
+      ]);
+      const speedTiers = normalizeSpeedTiersForSelect(model.speedTiers);
+      const speed = ['standard', 'fast'].includes(saved.speedTier) ? saved.speedTier : '';
+      if (speed && !speedTiers.includes(speed)) speedTiers.push(speed);
+      return {
+        ...model, unverified: true, reasoningEfforts, speedTiers,
+        defaultReasoningEffort: reasoningEfforts.includes(saved.reasoningEffort)
+          ? saved.reasoningEffort : model.defaultReasoningEffort,
+        defaultSpeedTier: speed || model.defaultSpeedTier || 'standard'
+      };
+    });
+  }
+
+  function getRenderedModelEntries(panel) {
+    return Array.from(panel?.querySelector('[data-model]')?.options || []).map(option => ({
+      id: option.value,
+      label: option.textContent,
+      reasoningEfforts: (option.dataset.reasoningEfforts || '').split(',').filter(Boolean),
+      defaultReasoningEffort: option.dataset.defaultReasoningEffort || '',
+      reasoningPresentation: option.dataset.reasoningPresentation || '',
+      speedTiers: (option.dataset.speedTiers || 'standard').split(',').filter(Boolean),
+      defaultSpeedTier: option.dataset.defaultSpeedTier || 'standard'
+    }));
   }
 
   function shouldUseBuiltInFallback(response) {
@@ -114,6 +149,8 @@
     normalizeReasoningEffortsForSelect,
     normalizeSpeedTiersForSelect,
     retainSelectedModel,
+    preserveSelectedCapabilities,
+    getRenderedModelEntries,
     shouldUseBuiltInFallback
   };
   return api;

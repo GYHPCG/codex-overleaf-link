@@ -237,6 +237,7 @@ function createReleaseTestIndexPath() {
   const add = spawnSync('git', [
     'add',
     '--',
+    'README.zh-CN.md',
     'install.ps1',
     'native-host/src/nativeHostPlatform.js',
     'extension/bootstrap/background.js',
@@ -1471,6 +1472,10 @@ releaseTest('build-release creates expected artifacts and metadata', (t) => {
     for (const fileName of expectedFiles) {
       assert.equal(fs.existsSync(path.join(outputDir, fileName)), true, `${fileName} was not generated`);
     }
+
+    const npmEntries = listTarEntries(path.join(outputDir, npmTarball));
+    assert.ok(npmEntries.includes('package/README.md'));
+    assert.ok(npmEntries.includes('package/README.zh-CN.md'));
 
     const manifest = readJson(path.join(outputDir, 'release-manifest.json'));
     assert.equal(manifest.version, version);

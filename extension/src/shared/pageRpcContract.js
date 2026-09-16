@@ -5,7 +5,7 @@
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this), function () {
   'use strict';
 
-  var REVISION = '2026-08-04-page-rpc-contract-v15';
+  var REVISION = '2026-09-14-native-text-upload-v28';
   var METHODS = freezeCatalog({
     initializeCapability: entry('bridge.initialize', 'control', 'none', 'default', false, 'none'),
     probe: entry('bridge.probe', 'read', 'none', 'default', false, 'safe'),
@@ -22,6 +22,7 @@
     binaryUploadCommit: entry('asset.write', 'document', 'required', 'writeback', true, 'no_retry'),
     binaryUploadAbort: entry('asset.stage', 'cache', 'none', 'default', false, 'idempotent'),
     jumpToPosition: entry('editor.navigate', 'navigation', 'required', 'default', false, 'idempotent'),
+    reconcileTrackedChangeCapture: entry('tracked_changes.read', 'read', 'required', 'default', false, 'safe'),
     rejectTrackedChanges: entry('tracked_changes.reject', 'document', 'required', 'lifecycle', true, 'no_retry'),
     acceptTrackedChanges: entry('tracked_changes.accept', 'document', 'required', 'lifecycle', true, 'no_retry'),
     triggerCompile: entry('compile.trigger', 'page_state', 'required', 'compile', false, 'no_retry'),

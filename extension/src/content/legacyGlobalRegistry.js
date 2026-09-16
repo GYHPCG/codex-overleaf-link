@@ -75,6 +75,7 @@
     'StorageMigration',
     'Summary',
     'Theme',
+    'TrackedChangeCaptureController',
     'UndoOperations',
     'UpdateIdle',
     'UpdateNotice',

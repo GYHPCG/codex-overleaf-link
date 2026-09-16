@@ -123,6 +123,7 @@
           const raw = entry?.event || {};
           if (raw.type === 'codex.turn.bound') {
             session.codexThreadId = String(raw.detail?.threadId || session.codexThreadId || '');
+            record.codexThreadId = String(raw.detail?.threadId || record.codexThreadId || '');
             record.codexTurnId = String(raw.detail?.turnId || record.codexTurnId || '');
             record.nativeEventSeq = sequence;
             continue;

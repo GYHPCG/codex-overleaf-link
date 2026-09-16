@@ -4,7 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const lifecycleSource = fs.readFileSync(
-  path.join(__dirname, '../extension/src/page/trackedChangesLifecycle.js'),
+  path.join(__dirname, '../extension/src/page/trackedChangeCapture.js'),
   'utf8'
 );
 

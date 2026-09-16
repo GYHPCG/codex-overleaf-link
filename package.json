@@ -1,6 +1,6 @@
 {
   "name": "codex-overleaf-link",
-  "version": "2.3.6",
+  "version": "2.4.0",
   "description": "Cross-platform Chrome bridge that connects Codex to the active Overleaf project.",
   "license": "MIT",
   "type": "commonjs",
@@ -17,9 +17,12 @@
     "build:content": "node scripts/build-content-bundle.mjs",
     "check:module-graph": "node scripts/check-content-module-graph.mjs",
     "test": "npm run check:module-graph && node scripts/run-tests.mjs",
+    "test:fast": "npm run check:module-graph && node scripts/run-tests.mjs --fast",
+    "test:focus": "npm run check:module-graph && node scripts/run-tests.mjs",
     "check:architecture": "node scripts/check-architecture-budget.mjs --enforce-target",
     "benchmark:large": "node scripts/benchmark-large-project.mjs --gate",
     "smoke:extension": "npm run build:content && node scripts/smoke-extension.mjs",
+    "smoke:prepare:chrome": "npm run build:content && npm run test:fast && npm run install:managed",
     "verify:release": "node scripts/verify-release.mjs",
     "verify:source": "node scripts/verify-release.mjs --source-hygiene-only",
     "verify:release-artifacts": "node scripts/verify-release-artifacts.mjs",
@@ -60,6 +63,7 @@
     "scripts/uninstall-native-host.mjs",
     "scripts/verify-npm-package.mjs",
     "README.md",
+    "README.zh-CN.md",
     "package.json"
   ],
   "devDependencies": {

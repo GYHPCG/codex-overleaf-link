@@ -397,7 +397,7 @@
     if (!result || typeof result !== 'object' || result.ok === false) return result;
     if (Array.isArray(result.skipped) && result.skipped.length > 0) return result;
     const expectedFiles = Array.isArray(run?.undoExpectedFiles) ? run.undoExpectedFiles : [];
-    if (!expectedFiles.length || isUndoVerifiedContentMatching(run, result)) return result;
+    if (!expectedFiles.length || isUndoVerifiedContentMatching(run, result, options)) return result;
     const path = expectedFiles.find(entry => typeof entry?.path === 'string')?.path || '';
     appendSyntheticFailure(result, options.buildFailure?.('undo_not_verified', { path, type: 'undo' }, {
       changedDocument: true,
@@ -407,15 +407,18 @@
     return result;
   }
 
-  function isUndoVerifiedContentMatching(run, result) {
+  function isUndoVerifiedContentMatching(run, result, options = {}) {
     const expectedByPath = new Map((run?.undoExpectedFiles || [])
       .filter(file => typeof file?.path === 'string' && typeof file?.content === 'string')
       .map(file => [normalizeSettlementPath(file.path), file.content])
       .filter(([path]) => path));
     if (!expectedByPath.size) return true;
+    const postByPath = new Map((Array.isArray(options?.postFiles) ? options.postFiles : [])
+      .filter(file => typeof file?.path === 'string' && typeof file?.content === 'string')
+      .map(file => [normalizeSettlementPath(file.path), file.content]));
     const applied = Array.isArray(result?.applied) ? result.applied : [];
     return Array.from(expectedByPath).every(([path, expected]) =>
-      applied.some(entry => isVerifiedUndoEntryForPath(entry, path, expected))
+      applied.some(entry => isVerifiedUndoEntryForPath(entry, path, expected, postByPath.get(path)))
     );
   }
 
@@ -438,7 +441,7 @@
     ));
   }
 
-  function isVerifiedUndoEntryForPath(entry, path, expectedContent) {
+  function isVerifiedUndoEntryForPath(entry, path, expectedContent, postContent) {
     const inner = entry?.result || {};
     if (inner.ok === false) return false;
     const normalizedPath = normalizeSettlementPath(path);
@@ -456,7 +459,18 @@
         && inner.verifiedContent === expectedContent;
     }
     if (key === `snapshot-undo:${normalizedPath}`) {
-      return inner.verifiedContent === expectedContent;
+      if (inner.verifiedContent === expectedContent) return true;
+      const proof = inner.undoRebaseProof, before = proof?.beforeUndoContent;
+      if (inner.verified !== true || proof?.version !== 1
+        || normalizeSettlementPath(proof.path) !== normalizedPath
+        || typeof before !== 'string' || typeof postContent !== 'string' || !postContent
+        || typeof inner.verifiedContent !== 'string') return false;
+      // The page observed prefix + post + suffix before Undo. Prove that only
+      // this run's post-image became its pre-image, preserving both envelopes.
+      const start = before.indexOf(postContent);
+      if (start < 0 || before.indexOf(postContent, start + 1) >= 0) return false;
+      return inner.verifiedContent === before.slice(0, start) + expectedContent
+        + before.slice(start + postContent.length);
     }
     return false;
   }

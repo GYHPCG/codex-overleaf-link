@@ -97,6 +97,25 @@
     return match ? decodeURIComponent(match[1]) : null;
   }
 
+  function readNativeTreePath(node) {
+    const row = node?.closest?.('[role="treeitem"]');
+    const root = document.querySelector?.('[data-testid="file-tree-list-root"]');
+    if (!row || !root?.contains?.(row) || !row.querySelector?.('[data-file-type="doc"][data-file-id]')) return '';
+    const parts = [row.getAttribute('aria-label')];
+    let group = row.closest('[role="tree"]');
+    const seen = new Set();
+    while (group && group !== root) {
+      if (seen.has(group)) return '';
+      seen.add(group);
+      const folder = group.previousElementSibling;
+      if (folder?.getAttribute?.('role') !== 'treeitem' || !folder.querySelector?.('[data-file-type="folder"]')) return '';
+      parts.unshift(folder.getAttribute('aria-label'));
+      group = group.parentElement?.closest?.('[role="tree"]');
+    }
+    if (group !== root || parts.some(part => !part || /[/\\]/.test(part))) return '';
+    return normalizeSafeProjectPath(parts.join('/'));
+  }
+
   function getActiveFilePath() {
     const editorStorePath = getEditorStoreFilePath({ disambiguateBasename: true });
     if (editorStorePath && window.CodexOverleafProjectFiles.isTextProjectPath(editorStorePath) && !hasMultipleTextPathExtensions(editorStorePath)) {
@@ -121,7 +140,7 @@
     for (const selector of selectors) {
       const nodes = Array.from(document.querySelectorAll?.(selector) || []);
       for (const node of nodes) {
-        const path = node ? readProjectPathFromNode(node) : '';
+        const path = node ? readNativeTreePath(node) || readProjectPathFromNode(node) : '';
         if (isActiveFilePathCandidate(path, node)) {
           candidates.push({
             node,
@@ -408,6 +427,11 @@
     const pathNodes = typeof event?.composedPath === 'function'
       ? event.composedPath()
       : [];
+    if (pathNodes.some(node => node?.id === 'codex-overleaf-panel')
+      || event?.target?.closest?.('#codex-overleaf-panel')) return '';
+    const insideTree = pathNodes.some(node => /(?:^|\s)(?:file-tree|project-tree|file-tree-list)(?:\s|$)/.test(String(node?.className || '')))
+      || event?.target?.closest?.('.file-tree, .project-tree, .file-tree-list');
+    if (!insideTree) return '';
     for (const node of pathNodes) {
       if (!node || typeof node.getAttribute !== 'function') {
         continue;
@@ -1355,7 +1379,10 @@
       const activeFileMatches = !filePath || getActiveFilePath() === filePath;
       const text = readActiveEditorText();
       lastText = text;
-      const textReady = window.CodexOverleafProjectFiles.isUsableProjectFileContent(text);
+      const knownEmptyEditor = options.allowEmpty === true && typeof text === 'string' && /^(?:\r?\n)*$/.test(text)
+        && Boolean(getActiveEditorIdentity());
+      const textReady = options.requireEmpty === true ? knownEmptyEditor
+        : knownEmptyEditor || window.CodexOverleafProjectFiles.isUsableProjectFileContent(text);
       const signatureChanged = !options.notSignature || contentSignature(text) !== options.notSignature;
       if (activeFileMatches && textReady && signatureChanged) {
         return {
@@ -1552,6 +1579,7 @@
       collectInternalRootKeys,
       collectProjectTextPaths,
       contentSignature,
+      invalidateDomProjectPathCache,
       createFile,
       deleteFile,
       fileTreeMethodNames,

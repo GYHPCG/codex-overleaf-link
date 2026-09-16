@@ -1,6 +1,5 @@
 (function initCodexOverleafOtWarmMirror() {
   'use strict';
-
   // Experimental OT warm-mirror glue carved out of contentRuntime.js (v1.4.9
   // structural-debt phase 5): the per-project enable toggle flow, the
   // poll/flush timers and patch queue, mirror prefetch, warm-start
@@ -52,6 +51,7 @@
   let currentOtStatus = 'off';
   let otTogglePending = false;
   let otSyncRequestId = 0;
+  let otStartRetryCount = 0;
   let otWarmMirrorProjectId = '';
   let lastExperimentalOtProjectId = '';
   let otWarmMirrorState = {
@@ -226,6 +226,7 @@
     const projectId = getCurrentProjectId();
     otWarmMirrorState.failureActive = false;
     lastExperimentalOtProjectId = projectId;
+    otStartRetryCount = 0;
     setExperimentalOtEnabledForProject(projectId, checkbox.checked);
     updateExperimentalOtToggleControl(checkbox.checked);
     // Per-card saved feedback, same contract as every other settings card.
@@ -306,8 +307,10 @@
       await pauseOtWarmMirror(pauseAfterStart.reason || 'paused');
       return response;
     }
-    otWarmMirrorState.failureActive = false;
+    if (status === 'starting') recordOtFailure('missing_active_path', 'start');
+    else otWarmMirrorState.failureActive = false;
     updateOtStatusDisplay(status);
+    otStartRetryCount = 0;
     scheduleOtEventPolling(projectId, { immediate: true });
     return response;
   }
@@ -338,21 +341,36 @@
     clearOtEventPolling({ clearPatchQueue: true });
     recordOtFailure(readOtBridgeErrorCode(response, 'ot_start_failed'), 'start');
     otWarmMirrorState.suspended = true;
-    setExperimentalOtEnabledForProject(projectId, false);
-    const experimentalOtCheckbox = getPanel()?.querySelector('[data-experimental-ot]');
-    if (experimentalOtCheckbox) {
-      experimentalOtCheckbox.checked = false;
-    }
+    // Observer availability is transient; only an explicit user action may
+    // change the persisted opt-in. A cold editor/bridge must not turn OT off
+    // permanently. failureActive/suspended already prohibit cache reuse.
+    updateExperimentalOtToggleControl(isExperimentalOtEnabledForProject(projectId));
     updateOtStatusDisplay('unavailable');
-    saveStateSoon();
     try { await callPageBridge('stopOtObserver', { projectId }); } catch (_error) { /* preserve the original failure */ }
+    scheduleOtStartRetry(projectId, requestId);
+  }
+
+  function scheduleOtStartRetry(projectId, requestId) {
+    const retryDelays = [1000, 3000, 6000];
+    const canRetry = () => isCurrentOtSync(requestId, projectId) && getCurrentProjectId() === projectId
+      && isExperimentalOtEnabledForProject(projectId) && !getCurrentRunView();
+    if (!canRetry() || otStartRetryCount >= retryDelays.length) return;
+    // Use the existing owned timer so disabling OT, changing projects and
+    // starting a new observation all cancel pending retries normally.
+    const delayMs = retryDelays[otStartRetryCount++];
+    otWarmMirrorState.pollTimer = window.setTimeout(() => {
+      otWarmMirrorState.pollTimer = null;
+      if (!canRetry()) return;
+      syncOtWarmMirrorController().catch(() => {
+        if (getCurrentProjectId() === projectId && isExperimentalOtEnabledForProject(projectId)) {
+          updateOtStatusDisplay('unavailable');
+        }
+      });
+    }, delayMs);
   }
 
   function readOtBridgeStatus(response) {
-    if (!response || response.ok === false) {
-      return 'unavailable';
-    }
-    return response.state || response.status || response.result?.state || response.result?.status || 'unavailable';
+    return otWarmMirrorController.readOtBridgeStatus(response);
   }
 
   function ensureOtWarmMirrorStateProject(projectId) {
@@ -361,6 +379,7 @@
     }
     clearOtEventPolling({ clearPatchQueue: true });
     otWarmMirrorState.projectId = projectId;
+    otStartRetryCount = 0;
     otWarmMirrorState.lastPatchAt = 0;
     otWarmMirrorState.lastErrorCode = '';
     otWarmMirrorState.failureActive = false;
@@ -438,6 +457,7 @@
         return statusResponse;
       }
       const status = readOtBridgeStatus(statusResponse);
+      if (status === 'observing' && otWarmMirrorState.lastFailure?.phase === 'start') Object.assign(otWarmMirrorState, { failureActive: false, lastErrorCode: '', lastFailure: null });
       if (['unavailable', 'inconsistent'].includes(status)) recordOtFailure(readOtBridgeErrorCode(statusResponse, 'ot_observer_unavailable'), 'observe');
       if (status) {
         updateOtStatusDisplay(status);
@@ -470,27 +490,11 @@
   }
 
   function readOtBridgeEvents(response) {
-    if (Array.isArray(response)) {
-      return response;
-    }
-    if (Array.isArray(response?.events)) {
-      return response.events;
-    }
-    if (Array.isArray(response?.result?.events)) {
-      return response.result.events;
-    }
-    return [];
+    return otWarmMirrorController.readOtBridgeEvents(response);
   }
-
   function readOtBridgeErrorCode(response, fallback) {
-    const value = response?.lastErrorCode
-      || response?.reason
-      || response?.error?.code
-      || response?.error
-      || fallback;
-    return typeof value === 'string' ? value : fallback;
+    return otWarmMirrorController.readOtBridgeErrorCode(response, fallback);
   }
-
   function recordOtFailure(code, phase) {
     code = otWarmMirrorController.normalizeFailureCode(code);
     otWarmMirrorState.lastErrorCode = code;

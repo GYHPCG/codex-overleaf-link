@@ -134,7 +134,8 @@
         return { stale: false, error: response?.error || { code: 'provider_models_unavailable' } };
       }
       const sourceModels = hasDiscoveredModels ? response.result.models : fallbackModels;
-      const retainedSelectedModel = retainSelectedModel(sourceModels, currentSelectedModel);
+      const preserveBuiltin = (selection?.providerId || 'builtin') === 'builtin' && (getState()?.providerId || 'builtin') === 'builtin';
+      const retainedSelectedModel = retainSelectedModel(sourceModels, currentSelectedModel, { preserveUnavailable: preserveBuiltin });
       const normalized = modelCatalog.normalizeDiscoveredModels({ models: sourceModels, selectedModel: retainedSelectedModel });
       if (normalized.usedFallback && response.result?.providerId && response.result.providerId !== 'builtin') {
         applyUnavailableModelOptions({ code: 'provider_model_catalog_invalid', message: 'The active provider returned no usable models.' });
@@ -143,9 +144,12 @@
           error: { code: 'provider_model_catalog_invalid', message: 'The active provider returned no usable models.' }
         };
       }
-      renderModelOptions(normalized.models, retainedSelectedModel, { allowUnknownSelected: false });
+      const renderedModels = preserveBuiltin
+        ? Support.preserveSelectedCapabilities(normalized.models, retainedSelectedModel, getState(), !hasDiscoveredModels || response.result?.source === 'fallback')
+        : normalized.models;
+      renderModelOptions(renderedModels, retainedSelectedModel, { allowUnknownSelected: false });
       modelDiscovery = {
-        status: hasDiscoveredModels && !normalized.usedFallback ? 'discovered' : 'fallback',
+        status: hasDiscoveredModels && !normalized.usedFallback && response.result?.source !== 'fallback' ? 'discovered' : 'fallback',
         source: hasDiscoveredModels ? response.result?.source || 'unknown' : 'fallback',
         fetchedAt: hasDiscoveredModels ? response.result?.fetchedAt || '' : '',
         errorCode: hasDiscoveredModels ? '' : response?.error?.code || '',
@@ -172,15 +176,16 @@
   }
 
   function applyUnavailableModelOptions(error) {
+    const selectedModel = resolveSelectedModel();
     const modelSelect = getPanel()?.querySelector('[data-model]');
     if (modelSelect) {
       modelSelect.textContent = '';
       const option = document.createElement('option');
-      option.value = resolveSelectedModel();
+      option.value = selectedModel;
       option.textContent = tx('Models unavailable', '模型不可用');
       option.disabled = true;
       modelSelect.append(option);
-      modelSelect.value = '';
+      modelSelect.value = selectedModel;
       modelSelect.disabled = true;
     }
     modelDiscovery = {
@@ -190,8 +195,15 @@
       errorCode: error?.code || '',
       errorMessage: error?.message || (error ? String(error) : '')
     };
-    renderReasoningOptions([]);
-    renderSpeedOptions([]);
+    const pendingModels = Support.preserveSelectedCapabilities(
+      [{ id: selectedModel, unverified: true }], selectedModel, getState(), true
+    );
+    renderReasoningOptions(pendingModels);
+    renderSpeedOptions(pendingModels);
+    for (const selector of ['[data-reasoning]', '[data-speed]']) {
+      const input = getPanel()?.querySelector(selector);
+      if (input) input.disabled = true;
+    }
     renderModelConfigChoices();
     updateModelDisplay();
   }
@@ -200,9 +212,9 @@
     const modelCatalog = getModelCatalog();
     const fallbackModels = modelCatalog.FALLBACK_MODELS;
     const sourceModels = fallbackModels;
-    const retainedSelectedModel = retainSelectedModel(sourceModels, selectedModel);
+    const retainedSelectedModel = retainSelectedModel(sourceModels, selectedModel, { preserveUnavailable: (getState()?.providerId || 'builtin') === 'builtin' });
     const normalized = modelCatalog.normalizeDiscoveredModels({ models: sourceModels, selectedModel: retainedSelectedModel });
-    renderModelOptions(normalized.models, retainedSelectedModel);
+    renderModelOptions(Support.preserveSelectedCapabilities(normalized.models, retainedSelectedModel, getState(), true), retainedSelectedModel);
     modelDiscovery = {
       status: 'fallback',
       source: 'fallback',

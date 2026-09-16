@@ -50,6 +50,122 @@
       collectElements,
     } = deps;
 
+  function nativeReviewBlocked(path, code, applied = [], requestStarted = false) {
+    const reason = requestStarted
+      ? 'The native review request could not be fully verified; some target changes may already be accepted. No text replay was attempted. Check Overleaf Review before retrying.'
+      : 'The native tracked-change scope could not be safely isolated. No review mutation was attempted. Use Overleaf Review to handle the changes individually.';
+    return { ok: false, applied, skipped: [{ trackedChange: { path }, result: {
+      ok: false, code, reason, failure: {
+        ...buildPageFailure('tracked_changes_remain', { file: path, operationType: 'review',
+          changedDocument: requestStarted, userMessage: reason,
+          evidence: { originalCode: code, writeStarted: requestStarted, acceptedCount: applied.length } }),
+        // Preserve recovery instead of applying Accept's legacy partial-success policy.
+        severity: 'blocked', terminalState: 'blocked'
+      }
+    } }] };
+  }
+
+  async function waitForNativeReview(path, refs, untracked = false) {
+    const prepare = () => untracked ? prepareUntrackedUndo(path) : prepareTrackedChangeReview(path, refs);
+    for (let attempt = 0; attempt < 16; attempt++) {
+      const scope = prepare();
+      if (scope.ok) return scope;
+      await delay(150);
+    }
+    return prepare();
+  }
+
+  async function prepareNativeReview(params, allowUntrackedUndo = false) {
+    const refs = normalizeTrackedChangeRefs(params.trackedChanges || []);
+    // A configured browser adapter fails closed even while its ledger is loading.
+    // Legacy adapter callers without native integration retain their original path.
+    if (typeof deps.getCodeMirrorEditorView !== 'function'
+      && !refs.some(ref => ref.key.startsWith('native:'))) return null;
+    const untracked = allowUntrackedUndo && params.untrackedUndo === true && !refs.length;
+    if (untracked) {
+      const keys = files => Array.isArray(files) && files.length && files.every(file =>
+        normalizeSafeProjectPath(file?.path) && typeof file.content === 'string')
+        ? files.map(file => normalizeSafeProjectPath(file.path)).sort() : [];
+      const before = keys(params.expectedFiles), after = keys(params.postFiles);
+      if (!before.length || new Set(before).size !== before.length || JSON.stringify(before) !== JSON.stringify(after))
+        return nativeReviewBlocked('', 'native_untracked_undo_checkpoint_unavailable');
+    }
+    const checkpoints = [...(Array.isArray(params.expectedFiles) ? params.expectedFiles : []),
+      ...(Array.isArray(params.postFiles) ? params.postFiles : [])];
+    const paths = [...new Set([...refs.map(ref => ref.path),
+      ...checkpoints.map(file => normalizeSafeProjectPath(file?.path))])];
+    if ((!refs.length && !untracked) || refs.some(ref => ref.invalidProjectPath || !ref.path) || paths.some(path => !path))
+      return nativeReviewBlocked('', 'native_review_identity_unavailable');
+    const files = [], deadline = Date.now() + 90000;
+    for (const path of paths) {
+      if (Date.now() >= deadline || checkWritebackRunProjectId(params))
+        return nativeReviewBlocked(path, 'native_review_context_changed');
+      if (getActiveFilePath() !== path && !(await openFileByPath(path)).ok)
+        return nativeReviewBlocked(path, 'native_review_file_unavailable');
+      const scope = await waitForNativeReview(path, refs, untracked);
+      if (!scope.ok) return nativeReviewBlocked(path, scope.reason || 'native_review_unavailable');
+      files.push({ path, nativeDocId: scope.nativeDocId, scope });
+    }
+    return { ok: true, files, refs, deadline };
+  }
+
+  async function acceptNativeReview(params, plan) {
+    const applied = [];
+    let token = window?.document?.querySelector?.('meta[name="ol-csrfToken"]')?.getAttribute('content');
+    try { token = JSON.parse(token); } catch (_error) { /* Older pages expose plain text. */ }
+    if (typeof token !== 'string' || !token || token.length > 4096
+      || typeof window?.fetch !== 'function' || typeof window?.AbortController !== 'function')
+      return nativeReviewBlocked('', 'native_accept_transport_unavailable');
+    // History-OT uses snapshot-range operations, not the classic ID endpoint.
+    // An unsupported engine must never fall through to text undo/replay.
+    const unsupported = plan.files.find(file => !file.scope.acceptByIdSupported);
+    if (unsupported) return nativeReviewBlocked(unsupported.path, 'native_accept_protocol_unsupported');
+    for (const file of plan.files) {
+      const path = file.path;
+      if (Date.now() >= plan.deadline || checkWritebackRunProjectId(params))
+        return nativeReviewBlocked(path, 'native_review_context_changed', applied, applied.length > 0);
+      if (getActiveFilePath() !== path && !(await openFileByPath(path)).ok)
+        return nativeReviewBlocked(path, 'native_review_file_unavailable', applied, applied.length > 0);
+      await waitForNativeReview(path, plan.refs);
+      const scope = prepareTrackedChangeReview(path, plan.refs), text = readActiveEditorText();
+      if (!scope.ok || !scope.acceptByIdSupported || scope.nativeDocId !== file.nativeDocId
+        || typeof text !== 'string' || Date.now() >= plan.deadline || checkWritebackRunProjectId(params))
+        return nativeReviewBlocked(path, 'native_review_scope_changed', applied, applied.length > 0);
+      const preserved = JSON.stringify(scope.unrelated.map(ref => ref.key).sort()), ids = new Set(scope.ids);
+      const controller = new window.AbortController();
+      const timer = window.setTimeout(() => controller.abort(), Math.min(12000, Math.max(1, plan.deadline - Date.now())));
+      try {
+        // Same ID-scoped endpoint and CSRF header used by Overleaf's RangesProvider.
+        const response = await window.fetch('/project/' + encodeURIComponent(params.runProjectId)
+          + '/doc/' + encodeURIComponent(scope.nativeDocId) + '/changes/accept', {
+          method: 'POST', credentials: 'same-origin', redirect: 'error', signal: controller.signal,
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Csrf-Token': token },
+          body: JSON.stringify({ change_ids: scope.ids })
+        });
+        if (!response.ok) return nativeReviewBlocked(path, 'native_accept_http_' + response.status, applied, true);
+      } catch (_error) {
+        return nativeReviewBlocked(path, 'native_accept_request_unconfirmed', applied, true);
+      } finally { window.clearTimeout(timer); }
+      let verified = false;
+      const until = Math.min(plan.deadline, Date.now() + 8000);
+      while (Date.now() < until) {
+        if (checkWritebackRunProjectId(params) || getActiveFilePath() !== path || readActiveEditorText() !== text)
+          return nativeReviewBlocked(path, 'native_accept_content_or_context_changed', applied, true);
+        const after = prepareTrackedChangeCapture(path);
+        if (after.source === 'native' && after.ready && after.nativeDocId === scope.nativeDocId) {
+          if (JSON.stringify(after.refs.filter(ref => !ids.has(ref.id)).map(ref => ref.key).sort()) !== preserved)
+            return nativeReviewBlocked(path, 'native_accept_unrelated_changes_changed', applied, true);
+          if (!after.refs.some(ref => ids.has(ref.id))) { verified = true; break; }
+        }
+        await delay(150);
+      }
+      if (!verified) return nativeReviewBlocked(path, 'native_accept_not_verified', applied, true);
+      applied.push(...scope.targets.map(trackedChange => ({ trackedChange,
+        result: { ok: true, method: 'overleaf-native-accept', verified: true } })));
+    }
+    return { ok: true, verified: true, applied, skipped: [] };
+  }
+
   async function rejectTrackedChanges(params = {}) {
     // Welcome-panel + write-guard: defense-in-depth.
     // The pageBridge wrapper already runs the runProjectId guard, but a
@@ -77,6 +193,10 @@
       };
     }
 
+    const nativeReview = await prepareNativeReview(params, true);
+    if (nativeReview && !nativeReview.ok) return nativeReview;
+    const mixedFile = nativeReview?.files.find(file => file.scope.unrelated.length);
+    if (mixedFile) return nativeReviewBlocked(mixedFile.path, 'native_reject_mixed_changes');
     const editorUndo = await rejectTrackedChangesViaEditorUndo(expectedFiles, postFiles, applied);
     if (editorUndo.ok) {
       if (applied.length > 0) {
@@ -250,21 +370,8 @@
     };
   }
 
-  // Accept All — instead of hunting Overleaf's per-change Accept controls (which
-  // is unreliable in real browser use), reuse two proven-reliable mechanisms:
-  //
-  //   1. Editor-undo the run's tracked writeback back to its pre-write content
-  //      (the reject path's primary mechanism), which makes every one of the
-  //      run's tracked changes vanish.
-  //   2. Switch Overleaf to Editing mode (Track Changes OFF) and re-apply the
-  //      run's post-write content as a plain, untracked edit.
-  //
-  // Net result: the run's new content lands as permanent, untracked text — the
-  // run is decisively accepted, with no DOM-control hunting.
-  //
-  // If the editor-undo cannot reach the pre-write state (content drifted — e.g.
-  // the user edited after the run), this bails WITHOUT re-writing so it never
-  // makes the document worse, mirroring Undo's safety stance.
+  // Native-ledger browsers accept exact IDs without changing document text.
+  // The original undo/replay flow remains only for legacy adapter callers.
   async function acceptTrackedChanges(params = {}) {
     // Welcome-panel + write-guard: defense-in-depth.
     // The pageBridge wrapper already runs the runProjectId guard, but a
@@ -273,6 +380,8 @@
     // guard uses.
     const writeGuardBlock = checkWritebackRunProjectId(params);
     if (writeGuardBlock) return writeGuardBlock;
+    const nativeReview = await prepareNativeReview(params);
+    if (nativeReview) return nativeReview.ok ? acceptNativeReview(params, nativeReview) : nativeReview;
     const expectedFiles = Array.isArray(params.expectedFiles) ? params.expectedFiles : [];
     const postFiles = Array.isArray(params.postFiles) ? params.postFiles : [];
     const applied = [];
@@ -377,20 +486,8 @@
       };
     }
 
-    // Step 2: switch to Editing mode (Track Changes OFF) so the replay lands as
-    // plain, untracked text.
-    //
-    // ensureEditing() short-circuits on isEditingConfirmedForNoTraceUndo, whose
-    // "already Editing" detection is negation-based and false-positives while
-    // Track Changes is actually ON (e.g. the Reviewing mode shows only as a
-    // dropdown-trigger label with no active aria attribute, so reviewing is not
-    // positively confirmed and a stray "Editing" menu option is read as the
-    // current mode). Trusting that short-circuit replays the run while tracked.
-    //
-    // So do not trust the short-circuit here: read the reviewing state
-    // explicitly, and if Reviewing/Track Changes is on — or Editing is not
-    // positively confirmed OFF — force the toggle via setReviewingEnabled(false)
-    // rather than ensureEditing's lenient path.
+    // Legacy replay requires positively confirmed Editing. The strict
+    // detector and its rationale are kept in forceEditingForAcceptReplay.
     const modeBefore = getReviewingState({});
     pushDiagnostic('modeBefore', summarizeReviewingStateForDiagnostics(modeBefore));
     const editingSwitch = await forceEditingForAcceptReplay();
@@ -1039,6 +1136,7 @@
     const paths = Array.from(expectedByPath.keys()).filter(path => postByPath.has(path));
     const rebasedExpectedByPath = new Map();
     const rebasedPostByPath = new Map();
+    const undoRebaseProofs = new Map();
     if (!paths.length) {
       return {
         ok: false,
@@ -1084,6 +1182,9 @@
       }
       rebasedExpectedByPath.set(path, ready.expectedContent);
       rebasedPostByPath.set(path, ready.postContent);
+      if (ready.prefixLength || ready.suffixLength) {
+        undoRebaseProofs.set(path, { version: 1, path, beforeUndoContent: ready.postContent });
+      }
     }
 
     const operations = paths.map(path => ({
@@ -1106,7 +1207,11 @@
         path: item.operation?.path || '',
         label: 'No-trace snapshot undo'
       },
-      result: item.result
+      result: item.result?.ok !== false && item.result?.verified === true
+        && undoRebaseProofs.has(item.operation?.path)
+        && item.result.verifiedContent === rebasedExpectedByPath.get(item.operation?.path)
+        ? { ...item.result, undoRebaseProof: undoRebaseProofs.get(item.operation.path) }
+        : item.result
     });
     return {
       ok: !(result.skipped || []).length,
@@ -1444,124 +1549,11 @@
 
 
 
-  function diffTrackedChangeRefs(before = [], after = []) {
-    const beforeKeys = new Set((before || []).map(ref => ref.key).filter(Boolean));
-    const seen = new Set();
-    const added = [];
-    for (const ref of after || []) {
-      if (!ref?.key || beforeKeys.has(ref.key) || seen.has(ref.key)) {
-        continue;
-      }
-      seen.add(ref.key);
-      added.push(ref);
-    }
-    return added;
-  }
-
-  async function waitForTrackedChangeDiff(trackedBefore, paths, options = {}) {
-    const waitMs = Number.isFinite(Number(options.waitMs)) ? Number(options.waitMs) : 3000;
-    const intervalMs = Number.isFinite(Number(options.intervalMs)) ? Number(options.intervalMs) : 180;
-    const deadline = Date.now() + Math.max(0, waitMs);
-    let latest = [];
-    while (Date.now() <= deadline) {
-      const trackedAfter = collectTrackedChangeRefsForPaths(paths);
-      latest = diffTrackedChangeRefs(trackedBefore, trackedAfter);
-      if (latest.length > 0) {
-        return {
-          ok: true,
-          trackedChanges: latest,
-          waitMs
-        };
-      }
-      await delay(intervalMs);
-    }
-    return {
-      ok: true,
-      trackedChanges: latest,
-      waitMs
-    };
-  }
-
-  function collectTrackedChangeRefsForPaths(paths = []) {
-    const pathSet = new Set((paths || []).filter(Boolean));
-    const activePath = getActiveFilePath();
-    return collectTrackedChangeNodes()
-      .map(node => trackedChangeRefFromNode(node, activePath))
-      .filter(ref => ref.key)
-      .filter(ref => !pathSet.size || !ref.path || pathSet.has(ref.path));
-  }
-
-  function collectTrackedChangeNodes() {
-    const selector = [
-      '[data-change-id]',
-      '[data-review-id]',
-      '[data-track-change-id]',
-      '[data-ol-change-id]',
-      '[data-path][class*="change" i]',
-      '.ol-cm-change',
-      '.review-panel-entry-change',
-      '[class*="track-change" i]',
-      '[class*="review-change" i]',
-      '[class*="suggest" i]',
-      '[aria-label*="change" i]',
-      '[title*="change" i]'
-    ].join(',');
-    return uniqueNodes([
-      ...collectElements(selector, 1200),
-      ...collectElements('*', 3500).filter(isTrackedChangeNode)
-    ]).filter(isTrackedChangeNode);
-  }
-
-  function isTrackedChangeNode(node) {
-    if (!node || isInsideCodexPanel(node)) {
-      return false;
-    }
-    const signal = normalizeReviewingSignalText(readNodeSignalText(node));
-    const tag = (node.tagName || '').toLowerCase();
-    if (tag === 'button' && /\b(?:accept|reject|decline|discard|批准|接受|拒绝|丢弃)\b/i.test(signal)) {
-      return false;
-    }
-    if (readTrackedChangeId(node)) {
-      return true;
-    }
-    return /\b(?:tracked change|track change|review change|suggestion|insert(?:ion)?|delet(?:e|ion)|change)\b/i.test(signal)
-      || /留痕|建议|插入|删除|更改|修改/.test(signal);
-  }
-
-  function trackedChangeRefFromNode(node, fallbackPath = '') {
-    const id = readTrackedChangeId(node);
-    const key = id ? `id:${id}` : `sig:${compact(readNodeSignalText(node), 180)}`;
-    const path = normalizeSafeProjectPath(
-      node.getAttribute?.('data-path')
-      || node.getAttribute?.('data-file-path')
-      || node.getAttribute?.('data-doc-path')
-      || fallbackPath
-      || ''
-    );
-    return {
-      key,
-      id,
-      path,
-      label: compact(readNodeSignalText(node), 180)
-    };
-  }
-
-  function readTrackedChangeId(node) {
-    for (const attribute of [
-      'data-change-id',
-      'data-review-id',
-      'data-track-change-id',
-      'data-ol-change-id',
-      'data-id',
-      'id'
-    ]) {
-      const value = node.getAttribute?.(attribute) || '';
-      if (value && /\b(?:change|review|track|suggest)|\d|[a-f0-9-]{8,}/i.test(value)) {
-        return String(value);
-      }
-    }
-    return '';
-  }
+  const captureModule = window?.CodexOverleafTrackedChangeCapture
+    || (typeof module === 'object' && module.exports ? require('./trackedChangeCapture.js') : null);
+  const { collectTrackedChangeNodes, trackedChangeRefFromNode, collectTrackedChangeRefsForPaths,
+    waitForTrackedChangeDiff, prepareTrackedChangeCapture, prepareTrackedChangeReview, prepareUntrackedUndo, getTrackedChangeCaptureStatus,
+    captureTrackedWrite, reconcileTrackedChangeCapture } = captureModule.create(deps);
 
   function orderTrackedChangesForReviewAction(refs = []) {
     return (refs || []).slice().reverse();
@@ -1573,7 +1565,8 @@
       return null;
     }
     return collectTrackedChangeNodes()
-      .find(node => trackedChangeRefFromNode(node, ref.path || getActiveFilePath()).key === targetKey)
+      .find(node => trackedChangeRefFromNode(node, ref.path || getActiveFilePath()).key === targetKey
+        || (targetKey.startsWith('sig:') && 'sig:' + compact(readNodeSignalText(node), 180) === targetKey))
       || null;
   }
 
@@ -1639,6 +1632,9 @@
       acceptTrackedChanges,
       rejectTrackedChanges,
       collectTrackedChangeRefsForPaths,
+      prepareTrackedChangeCapture, getTrackedChangeCaptureStatus,
+      captureTrackedWrite,
+      reconcileTrackedChangeCapture,
       waitForTrackedChangeDiff
     };
   }

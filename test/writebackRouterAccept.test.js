@@ -178,7 +178,10 @@ function createAcceptHarness(spec = {}) {
         return Promise.resolve({ ok: true, method: 'dom-click' });
       }
     },
-    window: { setTimeout, clearTimeout },
+    // Legacy adapter tests inject an explicit identity guard. Production uses
+    // the real writeGuard, exercised by pageBridgeStaleGuard.test.js.
+    window: { setTimeout, clearTimeout,
+      CodexOverleafWriteGuard: { create: () => ({ runWriteGuard: async () => null }) } },
     ...spec.depOverrides
   });
 
@@ -1438,4 +1441,18 @@ test('Fix D: writebackRouter array-shaped applyOperations passes through when op
   const skipCodes = (result.skipped || []).map(s => s && s.result && s.result.code);
   assert.ok(!skipCodes.includes('editor_project_id_unavailable'),
     'array-entry with runProjectId must NOT trip the guard (got skipped codes: ' + JSON.stringify(skipCodes) + ')');
+});
+
+test('no-trace undo fails closed when the project identity guard is unavailable', async () => {
+  const harness = createAcceptHarness({ startReviewing: false,
+    depOverrides: { window: { setTimeout, clearTimeout } } });
+  const result = await harness.router.applyOperations({
+    runProjectId: 'test-project', reviewingPolicy: 'no-trace-undo',
+    baseFiles: [{ path: harness.path, content: harness.postContent }],
+    operations: [{ type: 'edit', path: harness.path, replaceAll: harness.preContent }]
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.skipped[0].result.code, 'editor_project_id_unavailable');
+  assert.equal(harness.state.writes.length, 0);
+  assert.equal(harness.state.editorText, harness.postContent);
 });

@@ -258,6 +258,8 @@ export const ARCHITECTURE_FILE_BUDGETS = Object.freeze([
     path: 'extension/src/page/trackedChangesLifecycle.js',
     maxLines: 1650
   },
+  { path: 'extension/src/page/trackedChangeCapture.js', maxLines: 350 },
+  { path: 'extension/src/content/trackedChangeCaptureController.js', maxLines: 190 },
   {
     path: 'extension/src/page/treeOperations.js',
     maxLines: 1650

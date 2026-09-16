@@ -641,6 +641,10 @@
         lines.push(`CodeMirror: docLength=${view.docLength || 0}; dispatch=${Boolean(view.hasDispatch)}; source=${view.source || 'unknown'}`);
       }
     }
+    const capture = probe?.trackedChangeCapture;
+    if (capture) lines.push(tx('Tracked ledger: ', '留痕记录：')
+      + 'source=' + capture.source + '; ready=' + capture.ready + '; count=' + capture.count
+      + '; doc=' + (capture.docId || 'none') + '; adapter=' + capture.adapter + '; reason=' + (capture.reason || 'none'));
     const projectDiagnostics = probe?.projectDiagnostics;
     if (projectDiagnostics) {
       lines.push(`Project records: ${projectDiagnostics.docRecordCount || 0}; roots=${(projectDiagnostics.internalRootKeys || []).slice(0, 6).join(', ') || 'none'}`);

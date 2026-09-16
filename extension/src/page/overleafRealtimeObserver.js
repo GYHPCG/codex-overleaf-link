@@ -73,6 +73,9 @@
 
       running = true;
       refreshActiveBaseline();
+      // The editor may mount after the page bridge. Keep the read-only
+      // observer alive until its first file identity is available.
+      if (statusName === 'unavailable' && lastErrorCode === 'missing_active_path') statusName = 'starting';
       if (running) attachDocumentListeners();
       return getStatus();
     }
@@ -103,7 +106,7 @@
         lastErrorCode,
         channelCandidates: cloneChannelCandidates(channelCandidates)
       };
-      if (statusName === 'unavailable' && statusReason) {
+      if ((statusName === 'unavailable' || statusName === 'starting') && statusReason) {
         status.reason = statusReason;
       }
       return status;

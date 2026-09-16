@@ -70,7 +70,13 @@
     } catch (_error) {
       return empty;
     }
-    return getUtf8ByteLength(serialized) <= MAX_PERSISTED_ACTION_BYTES_PER_RUN ? payload : empty;
+    if (getUtf8ByteLength(serialized) > MAX_PERSISTED_ACTION_BYTES_PER_RUN) return empty;
+    const captures = cloneSerializableArray(run.trackedChangeCaptures);
+    if (captures.length) {
+      const extended = { ...payload, trackedChangeCaptures: captures };
+      if (getUtf8ByteLength(JSON.stringify(extended)) <= MAX_PERSISTED_ACTION_BYTES_PER_RUN) return extended;
+    }
+    return payload; // Optional capture evidence must never evict a mature Undo payload.
   }
 
   function emptyActionPayload() {
@@ -100,6 +106,27 @@
       return new TextEncoder().encode(value).byteLength;
     }
     return value.length * 2;
+  }
+
+  // Persist only execution metadata; never infer a missing historical setting.
+  function compactRunExecutionSnapshot(run, normalizeString) {
+    var snapshot = run && run.executionSnapshot;
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return {};
+    var normalize = typeof normalizeString === 'function' ? normalizeString : String;
+    var compact = {};
+    var fields = ['schemaVersion', 'mode', 'providerId', 'providerRevision', 'model',
+      'reasoningEffort', 'speedTier', 'autoRecompile', 'requireReviewing', 'capturedAt', 'source'];
+    for (var key of fields) {
+      if (!Object.prototype.hasOwnProperty.call(snapshot, key)) continue;
+      var value = snapshot[key];
+      if (typeof value === 'string') compact[key] = normalize(value);
+      else if (value === null || typeof value === 'number' || typeof value === 'boolean') compact[key] = value;
+    }
+    if (Array.isArray(snapshot.focusFiles)) {
+      compact.focusFiles = snapshot.focusFiles.slice(0, 100)
+        .filter(function (value) { return typeof value === 'string'; }).map(normalize);
+    }
+    return { executionSnapshot: compact };
   }
 
   function compactProviderSnapshot(value) {
@@ -147,6 +174,7 @@
     compactRunsForStorage: compactRunsForStorage,
     compactRunActionPayload: compactRunActionPayload,
     compactProviderSnapshot: compactProviderSnapshot,
+    compactRunExecutionSnapshot: compactRunExecutionSnapshot,
     hashString: hashString
   };
 });

@@ -10,7 +10,8 @@
       container,
       callbacks: options.callbacks || {},
       i18n: options.i18n || {},
-      dismissInstalled: false
+      dismissInstalled: false,
+      cleanup: []
     };
 
     container.innerHTML = `
@@ -99,6 +100,11 @@
       instance.callbacks.onBeforeOpen?.();
     }
     popover.hidden = !open;
+    if (open) {
+      openFloating(instance, popover, 300);
+    } else {
+      hideFloating(popover);
+    }
     button.dataset.active = open ? 'true' : 'false';
     button.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
@@ -110,7 +116,7 @@
     if (!popover || !button) {
       return;
     }
-    popover.hidden = true;
+    hideFloating(popover);
     button.dataset.active = 'false';
     button.setAttribute('aria-expanded', 'false');
   }
@@ -119,7 +125,7 @@
     const instance = target?._instance || target;
     const result = instance?.container?.querySelector('[data-diagnostics-result]');
     if (result) {
-      result.hidden = true;
+      hideFloating(result);
     }
   }
 
@@ -181,6 +187,73 @@
     details.open = false;
     details.hidden = !technicalText;
     technical.textContent = technicalText;
+    closeMenu(instance);
+    openFloating(instance, root, 560);
+  }
+
+  // Keep DOM ownership (theme, locale and callbacks), but render above clipping
+  // ancestors where the browser supports the top layer. Fixed positioning is
+  // the viewport-based fallback for browsers without the Popover API.
+  function openFloating(instance, element, preferredWidth) {
+    if (element.isConnected === false) return;
+    element.hidden = false;
+    if (typeof element.showPopover === 'function') {
+      element.setAttribute('popover', 'manual');
+      try {
+        if (!element.matches(':popover-open')) element.showPopover();
+      } catch (_error) {
+        element.removeAttribute('popover');
+      }
+    }
+    positionFloating(instance, element, preferredWidth);
+  }
+
+  function hideFloating(element) {
+    if (!element) return;
+    if (typeof element.hidePopover === 'function' && element.getAttribute('popover') === 'manual') {
+      try {
+        if (element.matches(':popover-open')) element.hidePopover();
+      } catch (_error) {
+        element.removeAttribute('popover');
+      }
+    }
+    element.hidden = true;
+  }
+
+  function positionFloating(instance, element, preferredWidth) {
+    if (!element || element.hidden) return;
+    const button = instance.container.querySelector('[data-diagnostics-menu]');
+    if (!button?.getBoundingClientRect || !element.getBoundingClientRect) return;
+    if (button.getClientRects && !button.getClientRects().length) {
+      closeMenu(instance);
+      closeResult(instance);
+      return;
+    }
+    const doc = instance.container.ownerDocument || document;
+    const view = doc.defaultView || window;
+    const viewport = view.visualViewport;
+    const width = viewport?.width || view.innerWidth || doc.documentElement?.clientWidth;
+    const height = viewport?.height || view.innerHeight || doc.documentElement?.clientHeight;
+    if (!(width > 0 && height > 0)) return;
+    const margin = 12;
+    const gap = 8;
+    const leftEdge = (viewport?.offsetLeft || 0) + margin;
+    const topEdge = (viewport?.offsetTop || 0) + margin;
+    const rightEdge = leftEdge + Math.max(0, width - margin * 2);
+    const bottomEdge = topEdge + Math.max(0, height - margin * 2);
+    element.style.width = `${Math.min(preferredWidth, Math.max(0, width - margin * 2))}px`;
+    element.style.maxHeight = `${Math.min(640, Math.max(0, height - margin * 2))}px`;
+    const anchor = button.getBoundingClientRect();
+    const bounds = element.getBoundingClientRect();
+    const below = Math.max(0, bottomEdge - anchor.bottom - gap);
+    const above = Math.max(0, anchor.top - topEdge - gap);
+    const desiredTop = bounds.height > below && above > below
+      ? anchor.top - gap - bounds.height
+      : anchor.bottom + gap;
+    element.style.left = `${Math.max(leftEdge, Math.min(anchor.right - bounds.width, rightEdge - bounds.width))}px`;
+    element.style.top = `${Math.max(topEdge, Math.min(desiredTop, bottomEdge - bounds.height))}px`;
+    element.style.right = 'auto';
+    element.style.bottom = 'auto';
   }
 
   function renderInstallCommand(instance, container, command) {
@@ -272,13 +345,60 @@
       return;
     }
     instance.dismissInstalled = true;
-    document.addEventListener('click', event => {
+    const doc = instance.container.ownerDocument || document;
+    const view = doc.defaultView || window;
+    const listen = (target, type, handler, options) => {
+      if (!target?.addEventListener) return;
+      target.addEventListener(type, handler, options);
+      instance.cleanup.push(() => target.removeEventListener(type, handler, options));
+    };
+    listen(doc, 'click', event => {
       const wrap = instance.container?.querySelector('.codex-diagnostics-wrap');
       if (!wrap || wrap.contains(event.target)) {
         return;
       }
       closeMenu(instance);
     }, true);
+    listen(doc, 'keydown', event => {
+      if (event.key !== 'Escape') return;
+      const menu = instance.container.querySelector('[data-diagnostics-popover]');
+      const result = instance.container.querySelector('[data-diagnostics-result]');
+      if (menu && !menu.hidden) closeMenu(instance);
+      else if (result && !result.hidden) closeResult(instance);
+      else return;
+      event.preventDefault();
+      event.stopPropagation();
+      instance.container.querySelector('[data-diagnostics-menu]')?.focus();
+    }, true);
+    let frame = null;
+    const reposition = () => {
+      frame = null;
+      positionFloating(instance, instance.container.querySelector('[data-diagnostics-popover]'), 300);
+      positionFloating(instance, instance.container.querySelector('[data-diagnostics-result]'), 560);
+    };
+    const schedule = () => {
+      if (frame !== null) return;
+      if (view.requestAnimationFrame) frame = view.requestAnimationFrame(reposition);
+      else reposition();
+    };
+    listen(view, 'resize', schedule);
+    listen(doc, 'scroll', schedule, true);
+    listen(view.visualViewport, 'resize', schedule);
+    listen(view.visualViewport, 'scroll', schedule);
+    if (typeof view.ResizeObserver === 'function') {
+      const observer = new view.ResizeObserver(schedule);
+      for (const node of [
+        instance.container.closest('#codex-overleaf-panel') || instance.container,
+        instance.container.querySelector('[data-diagnostics-popover]'),
+        instance.container.querySelector('[data-diagnostics-result]')
+      ]) {
+        if (node) observer.observe(node);
+      }
+      instance.cleanup.push(() => observer.disconnect());
+    }
+    instance.cleanup.push(() => {
+      if (frame !== null) view.cancelAnimationFrame?.(frame);
+    });
   }
 
   // Drive the trigger's health dot. `health` is one of ok / warn / fail /
@@ -450,6 +570,10 @@
   }
 
   function destroy(instance) {
+    closeMenu(instance);
+    closeResult(instance);
+    for (const cleanup of instance.cleanup || []) cleanup();
+    instance.cleanup = [];
     instance.container.textContent = '';
   }
 

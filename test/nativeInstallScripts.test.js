@@ -1430,7 +1430,7 @@ test('README documents stable cross-platform manual install, uninstall, release 
   assert.match(readme, /install\.ps1/);
   assert.match(readme, /uninstall-native-host\.mjs/);
   assert.match(readme, /node\s+~\/\.codex-overleaf\/source\/scripts\/uninstall-native-host\.mjs/);
-  assert.match(readme, /node\s+\$env:LOCALAPPDATA\\CodexOverleaf\\source\\scripts\\uninstall-native-host\.mjs/);
+  assert.match(readme, /node\s+"\$env:LOCALAPPDATA\\CodexOverleaf\\source\\scripts\\uninstall-native-host\.mjs"/);
   assert.match(readme, /native host update required/i);
   assert.match(readme, /CODEX_OVERLEAF_EXTENSION_ID/);
   assert.match(readme, /allowed_origins/);

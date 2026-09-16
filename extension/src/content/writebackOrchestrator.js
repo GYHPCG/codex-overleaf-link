@@ -18,6 +18,7 @@
   let tx;
   let getLocale;
   let appendRunEvent;
+  let appendRunRecordEvent;
   // In-flight background mirror refresh (v1.7.5) — see the writeback path.
   let pendingMirrorRefresh = null;
   let appendChangeSummary;
@@ -67,6 +68,34 @@
     return writebackSettlement?.settle instanceof Function
       ? writebackSettlement.settle(input)
       : null;
+  }
+
+  function invalidateMirrorAfterUndo(runId, projectId, result = {}) {
+    if (!projectId || (result?.changedDocument !== true && !result?.applied?.length)) return Promise.resolve('not-attempted');
+    const pending = Promise.resolve(pendingMirrorRefresh).catch(() => {}).then(async () => {
+      const response = await sendBackgroundNative({ method: 'mirror.invalidate', params: { projectId } });
+      if (!response?.ok || response.result?.invalidated !== true) {
+        throw new Error(response?.error?.message || 'Native host did not confirm mirror invalidation.');
+      }
+      if (getCurrentProjectId() === projectId) {
+        resetContextProject();
+        await callPageBridge('invalidateProjectSnapshot', { invalidateFileList: true });
+      }
+      return 'invalidated';
+    }).catch(error => {
+      appendRunRecordEvent?.(runId, {
+        status: 'warning',
+        title: tx(
+          `Overleaf undo finished, but local mirror invalidation failed: ${error.message}. Refresh this project or reconnect the native host before running again.`,
+          `Overleaf 撤销已完成，但本地镜像失效处理失败：${error.message}。请刷新项目或重新连接 Native Host 后再运行。`
+        )
+      });
+      return 'failed';
+    }).finally(() => {
+      if (pendingMirrorRefresh === pending) pendingMirrorRefresh = null;
+    });
+    pendingMirrorRefresh = pending;
+    return pending;
   }
 
   async function applySyncChangesToOverleaf(syncChanges = [], project = {}, options = {}) {
@@ -822,6 +851,7 @@
       tx,
       getLocale,
       appendRunEvent,
+      appendRunRecordEvent,
       appendChangeSummary,
       appendCompletionReport,
       appendOperationsPreview,
@@ -867,6 +897,7 @@
     return {
       applySyncChangesToOverleaf,
       resolveCompileLogContext,
+      invalidateMirrorAfterUndo,
       getPendingMirrorRefresh: () => pendingMirrorRefresh
     };
   }

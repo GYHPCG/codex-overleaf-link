@@ -9,7 +9,7 @@ test('page RPC catalog owns every public page bridge method', () => {
     'getProjectFileList', 'invalidateProjectSnapshot', 'createCheckpoint',
     'ensureReviewing', 'ensureEditing', 'applyOperations',
     'binaryUploadBegin', 'binaryUploadAppend', 'binaryUploadCommit', 'binaryUploadAbort',
-    'jumpToPosition',
+    'jumpToPosition', 'reconcileTrackedChangeCapture',
     'rejectTrackedChanges', 'acceptTrackedChanges', 'triggerCompile',
     'getCompileLog', 'getCompileState', 'waitForSaveState', 'startOtObserver',
     'stopOtObserver', 'getOtStatus', 'drainOtEvents'

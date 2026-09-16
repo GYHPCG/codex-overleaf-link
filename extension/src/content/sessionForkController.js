@@ -16,19 +16,28 @@
       const source = findSource(previousState, runId);
       if (!source) return failFork('session_fork_source_missing', tr('forkRunUnavailable'));
       const { session, run, runIndex } = source;
-      if (run.status === 'running' || !session.codexThreadId || !run.codexTurnId) {
+      const draftThreadId = run.codexTurnId && run.interruptedDraft?.turnId === run.codexTurnId
+        ? run.interruptedDraft.threadId : '';
+      // Provider switches replace the session thread, not the selected node's origin.
+      const sourceThreadId = String(run.codexThreadId || draftThreadId || session.codexThreadId || '').trim();
+      if (run.status === 'running' || !sourceThreadId || !run.codexTurnId) {
         return failFork('session_fork_unavailable', tr('forkRunUnavailable'));
       }
-      const response = await sendBackgroundNative({
-        method: 'codex.thread.fork',
-        params: {
-          threadId: session.codexThreadId,
-          lastTurnId: run.codexTurnId,
-          speedTier: session.speedTier,
-          loadCodexLocalSkills: previousState.loadCodexLocalSkills !== false,
-          loadCodexOverleafSkills: previousState.loadCodexOverleafSkills !== false
-        }
-      });
+      let response;
+      try {
+        response = await sendBackgroundNative({
+          method: 'codex.thread.fork',
+          params: {
+            threadId: sourceThreadId,
+            lastTurnId: run.codexTurnId,
+            speedTier: session.speedTier,
+            loadCodexLocalSkills: previousState.loadCodexLocalSkills !== false,
+            loadCodexOverleafSkills: previousState.loadCodexOverleafSkills !== false
+          }
+        });
+      } catch (error) {
+        return failFork(error?.code || 'session_fork_failed', error?.message || tr('forkRunFailed'));
+      }
       if (!response?.ok || !response.result?.threadId) {
         return failFork(response?.error?.code || 'session_fork_failed', response?.error?.message || tr('forkRunFailed'));
       }

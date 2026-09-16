@@ -174,6 +174,23 @@
     return { ok: true };
   }
 
+  function readOtBridgeStatus(response) {
+    if (!response || response.ok === false) return 'unavailable';
+    return response.state || response.status || response.result?.state || response.result?.status || 'unavailable';
+  }
+
+  function readOtBridgeEvents(response) {
+    if (Array.isArray(response)) return response;
+    if (Array.isArray(response?.events)) return response.events;
+    if (Array.isArray(response?.result?.events)) return response.result.events;
+    return [];
+  }
+
+  function readOtBridgeErrorCode(response, fallback) {
+    const value = response?.lastErrorCode || response?.reason || response?.error?.code || response?.error || fallback;
+    return typeof value === 'string' ? value : fallback;
+  }
+
   function normalizeFailureCode(value, fallback = 'ot_error') {
     const code = typeof value === 'string' ? value : value?.code;
     if (/^[a-z][a-z0-9_]{0,79}$/.test(code || '')) return code;
@@ -265,6 +282,9 @@
     takePatchBatch,
     validatePatchReceipt,
     normalizeFailureCode,
+    readOtBridgeStatus,
+    readOtBridgeEvents,
+    readOtBridgeErrorCode,
     getFailureMessageKey,
     buildPatchFilesRequest,
     canUseOtWarmStart,

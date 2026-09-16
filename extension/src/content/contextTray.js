@@ -22,6 +22,7 @@
     setState = () => {},
     saveState = null,
     saveStateSoon = () => {},
+    onProjectFilesReady = () => {},
     updateActiveSession = defaultUpdateActiveSession,
     callPageBridge = () => Promise.resolve({ ok: false }),
     getCurrentProjectId = () => '',
@@ -201,6 +202,7 @@
         renderContextFiles(contextProject);
         if (isExactContextFileListProject(contextProject)) {
           setContextSyncState('exact-ready');
+          onProjectFilesReady(contextProject);
         } else if (contextSyncState !== 'partial') {
           setContextSyncState('exact-loading');
           void enhanceContextFilesFromExactSnapshot({ loadId: contextLoadId });
@@ -224,6 +226,7 @@
         contextProject = project;
         setContextSyncState(isExactContextFileListProject(project) ? 'exact-ready' : 'exact-loading');
         renderContextFiles(project);
+        if (isExactContextFileListProject(project)) onProjectFilesReady(project);
         if (!isExactContextFileListProject(project)) {
           void enhanceContextFilesFromExactSnapshot({
             force: Boolean(options.force),
@@ -292,6 +295,7 @@
         contextProject = project;
         setContextSyncState('exact-ready');
         renderContextFiles(project);
+        onProjectFilesReady(project);
       } catch (_error) {
         // The page file tree remains usable when the optional exact ZIP list is unavailable.
         if (loadId === contextLoadId) {

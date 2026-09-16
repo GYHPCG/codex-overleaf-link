@@ -11,6 +11,44 @@ const treeOperationsSource = fs.readFileSync(
   'utf8'
 );
 
+test('only an explicit new-file read may accept a known empty editor', async () => {
+  let content = '';
+  const empty = makeTreeNode({ label: 'empty.tex', docId: '111111111111111111111111', openPath: 'empty.tex' });
+  const harness = createTreeOperationsHarness({ selectedPath: 'empty.tex', nodes: [empty],
+    docs: [{ path: 'empty.tex', id: '111111111111111111111111' }],
+    readActiveEditorText: () => content, getActiveEditorIdentity: () => ({ type: 'codemirror-view', doc: {} }) });
+  assert.equal((await harness.ops.waitForActiveEditorText('empty.tex', 1)).ok, false);
+  assert.equal((await harness.ops.waitForActiveEditorText('empty.tex', 1, { allowEmpty: true })).ok, true);
+  assert.equal((await harness.ops.waitForActiveEditorText('other.tex', 1, { allowEmpty: true })).ok, false);
+  for (content of ['\n', '\r\n', '\n\n']) {
+    assert.equal((await harness.ops.waitForActiveEditorText('empty.tex', 1, { allowEmpty: true })).ok, true);
+  }
+  content = ' ';
+  assert.equal((await harness.ops.waitForActiveEditorText('empty.tex', 1, { allowEmpty: true })).ok, false);
+  content = undefined;
+  assert.equal((await harness.ops.waitForActiveEditorText('empty.tex', 1, { allowEmpty: true })).ok, false);
+});
+
+test('new-file readiness waits past the previous document buffer after its path switches', async () => {
+  const node = makeTreeNode({ label: 'new.tex', docId: '111111111111111111111111', openPath: 'new.tex' });
+  let reads = 0;
+  const harness = createTreeOperationsHarness({ selectedPath: 'new.tex', nodes: [node],
+    docs: [{ path: 'new.tex', id: '111111111111111111111111' }],
+    readActiveEditorText: () => ++reads === 1 ? 'Previous document content' : '\n',
+    getActiveEditorIdentity: () => ({ type: 'contenteditable', node: {} }) });
+  const ready = await harness.ops.waitForActiveEditorText('new.tex', 1000, { allowEmpty: true, requireEmpty: true });
+  assert.equal(ready.ok, true);
+  assert.equal(ready.text, '\n');
+  assert.equal(reads, 2);
+});
+
+test('new-file empty reads still require a live editor identity', async () => {
+  const empty = makeTreeNode({ label: 'empty.tex', docId: '111111111111111111111111', openPath: 'empty.tex' });
+  const harness = createTreeOperationsHarness({ selectedPath: 'empty.tex', nodes: [empty],
+    docs: [{ path: 'empty.tex', id: '111111111111111111111111' }], readActiveEditorText: () => '' });
+  assert.equal((await harness.ops.waitForActiveEditorText('empty.tex', 1, { allowEmpty: true })).ok, false);
+});
+
 test('tree operations resolves nested DOM basename nodes through Overleaf doc ids', () => {
   const rootId = '111111111111111111111111';
   const nestedId = '222222222222222222222222';
@@ -167,7 +205,7 @@ test('tree operations prefers the recently clicked file when stale selected node
   });
   const harness = createTreeOperationsHarness({
     selectedPath: 'main.tex',
-    nodes: [mainNode, folderNode, nestedNode],
+    nodes: [makeDomNode({ className: 'file-tree', children: [mainNode, folderNode] }), mainNode, folderNode, nestedNode],
     docs: [],
     getActiveEditorIdentity: () => ({ id: 'editor-before' }),
     activeEditorIdentityChanged: () => true
@@ -178,6 +216,38 @@ test('tree operations prefers the recently clicked file when stale selected node
   harness.dispatchWindowClick(nestedNode);
 
   assert.equal(harness.ops.getActiveFilePath(), 'example/test2.tex');
+});
+
+
+test('tree operations ignores Codex reference buttons when recording file-tree selections', () => {
+  const main = makeDomNode({ tagName: 'LI', role: 'treeitem', ariaLabel: 'main.tex' });
+  main.openPath = 'main.tex';
+  const reference = makeDomNode({ tagName: 'BUTTON', className: 'codex-line-reference' });
+  reference.attributes['data-path'] = 'example/test.tex';
+  makeDomNode({ id: 'codex-overleaf-panel', children: [reference] });
+  const harness = createTreeOperationsHarness({
+    selectedPath: 'main.tex', nodes: [main], docs: [],
+    getActiveEditorIdentity: () => ({ id: 'editor-before' }),
+    activeEditorIdentityChanged: () => true
+  });
+  harness.dispatchWindowClick(reference);
+  assert.equal(harness.ops.getRecentFileTreeSelectionPath(), '');
+  assert.equal(harness.ops.getActiveFilePath(), 'main.tex');
+});
+
+test('tree operations ignores data-path attributes outside the native file tree', () => {
+  const main = makeDomNode({ tagName: 'LI', role: 'treeitem', ariaLabel: 'main.tex' });
+  main.openPath = 'main.tex';
+  const unrelated = makeDomNode({ tagName: 'BUTTON' });
+  unrelated.attributes['data-path'] = 'example/test.tex';
+  const harness = createTreeOperationsHarness({
+    selectedPath: 'main.tex', nodes: [main], docs: [],
+    getActiveEditorIdentity: () => ({ id: 'editor-before' }),
+    activeEditorIdentityChanged: () => true
+  });
+  harness.dispatchWindowClick(unrelated);
+  assert.equal(harness.ops.getRecentFileTreeSelectionPath(), '');
+  assert.equal(harness.ops.getActiveFilePath(), 'main.tex');
 });
 
 test('tree operations expands collapsed folders before opening nested files', async () => {
@@ -264,10 +334,24 @@ test('tree operations opens nested files without falling back to a root basename
   assert.ok(nestedNode.clickCount >= 1, 'nested node should be clicked at least once');
 });
 
+test('cold native selection resolves nested paths without the legacy doc registry', () => {
+  const file = makeDomNode({ tagName: 'LI', role: 'treeitem', ariaLabel: 'my  draft.tex', ariaSelected: 'true' });
+  const root = { contains: node => node === file };
+  const folder = makeDomNode({ tagName: 'LI', role: 'treeitem', ariaLabel: 'example' });
+  folder.querySelector = selector => selector === '[data-file-type="folder"]' ? {} : null;
+  const group = { previousElementSibling: folder, parentElement: { closest: () => root } };
+  file.closest = selector => selector === '[role="treeitem"]' ? file : selector === '[role="tree"]' ? group : null;
+  file.querySelector = selector => selector === '[data-file-type="doc"][data-file-id]' ? {} : null;
+  const harness = createTreeOperationsHarness({ selectedPath: '', nodes: [file], docs: [], nativeTreeRoot: root });
+  assert.equal(harness.ops.getActiveFilePath(), 'example/my  draft.tex');
+});
+
 function createTreeOperationsHarness({
   selectedPath,
   nodes,
   docs,
+  nativeTreeRoot = null,
+  readActiveEditorText = () => 'ready',
   getActiveEditorIdentity = () => null,
   activeEditorIdentityChanged = () => false
 }) {
@@ -275,6 +359,7 @@ function createTreeOperationsHarness({
   const windowListeners = {};
   const document = {
     querySelector(selector) {
+      if (selector === '[data-testid="file-tree-list-root"]') return nativeTreeRoot;
       if (/\[aria-selected="true"\]|\.selected/.test(selector)) {
         return nodes.find(node => node.openPath === currentPath) || null;
       }
@@ -352,7 +437,7 @@ function createTreeOperationsHarness({
     normalizePath: projectFiles.normalizeSafeProjectPath,
     getActiveEditorIdentity,
     activeEditorIdentityChanged,
-    readActiveEditorText: () => 'ready'
+    readActiveEditorText
   });
   return {
     ops,
@@ -360,7 +445,11 @@ function createTreeOperationsHarness({
       windowListeners.click?.({
         target,
         isTrusted: true,
-        composedPath: () => [target, ...(target.parentElement ? [target.parentElement] : [])]
+        composedPath: () => {
+          const ancestors = [];
+          for (let node = target; node; node = node.parentElement) ancestors.push(node);
+          return ancestors;
+        }
       });
     },
     getSelectedPath() {

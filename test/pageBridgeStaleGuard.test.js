@@ -17,6 +17,7 @@ const pageBridgeSource = fs.readFileSync(
   path.join(__dirname, '../extension/src/pageBridge.js'),
   'utf8'
 );
+const textFileCreatorSource = fs.readFileSync(path.join(__dirname, '../extension/src/page/textFileCreator.js'), 'utf8');
 const binaryAssetUploaderSource = fs.readFileSync(
   path.join(__dirname, '../extension/src/page/binaryAssetUploader.js'),
   'utf8'
@@ -61,6 +62,7 @@ const writeGuardSource = fs.readFileSync(
   path.join(__dirname, '../extension/src/page/writeGuard.js'),
   'utf8'
 );
+const trackedChangeCaptureSource = fs.readFileSync(path.join(__dirname, '../extension/src/page/trackedChangeCapture.js'), 'utf8');
 const trackedChangesLifecycleSource = fs.readFileSync(
   path.join(__dirname, '../extension/src/page/trackedChangesLifecycle.js'),
   'utf8'
@@ -1313,7 +1315,7 @@ test('page bridge records and rejects Overleaf tracked changes for Reviewing wri
 
   assert.equal(write.ok, true, write.error || JSON.stringify(write));
   assert.equal(bridge.getFile('main.tex'), 'alpha delta gamma');
-  assert.equal(write.trackedChanges.length, 1);
+  assert.equal(write.trackedChanges.length, 2);
   assert.equal(write.trackedChanges[0].path, 'main.tex');
 
   const undo = await bridge.call('rejectTrackedChanges', {
@@ -1334,6 +1336,7 @@ test('page bridge records and rejects Overleaf tracked changes for Reviewing wri
 
 test('page bridge waits for delayed Overleaf tracked-change markers after a Reviewing write', async () => {
   const bridge = createPageBridgeHarness({
+    exposeNativeLedger: false,
     activePath: 'main.tex',
     reviewingOk: true,
     trackChangesOnDispatch: true,
@@ -1365,12 +1368,8 @@ test('page bridge waits for delayed Overleaf tracked-change markers after a Revi
   assert.equal(write.trackedChanges[0].path, 'main.tex');
 });
 
-test('page bridge routes acceptTrackedChanges to the writeback router: editor-undo then untracked replay', async () => {
-  // Accept All no longer hunts per-change Accept controls. It editor-undoes the
-  // run's tracked writeback back to its pre-write content, then re-applies the
-  // post-write content as a plain (untracked) edit. The harness's editor-undo
-  // button restores editorUndoTargets[path] (the pre-write content); the
-  // mode button toggles so Editing-mode replay + Reviewing restore both work.
+test('page bridge accepts native IDs without editor undo or text replay', async () => {
+  // The production adapter accepts only captured native IDs and never rewrites text.
   const bridge = createPageBridgeHarness({
     activePath: 'main.tex',
     reviewingOk: true,
@@ -1402,7 +1401,7 @@ test('page bridge routes acceptTrackedChanges to the writeback router: editor-un
 
   assert.equal(write.ok, true, write.error || JSON.stringify(write));
   assert.equal(bridge.getFile('main.tex'), 'alpha delta gamma');
-  assert.equal(write.trackedChanges.length, 1);
+  assert.equal(write.trackedChanges.length, 2);
   assert.equal(write.trackedChanges[0].path, 'main.tex');
 
   const accept = await bridge.call('acceptTrackedChanges', {
@@ -1420,22 +1419,19 @@ test('page bridge routes acceptTrackedChanges to the writeback router: editor-un
   assert.equal(accept.skipped.length, 0);
   // The run's post-write content is in the document as plain text.
   assert.equal(bridge.getFile('main.tex'), 'alpha delta gamma');
-  // The editor-undo cleared the run's tracked changes; the replay was untracked.
+  // The ID-scoped response clears the ledger without an editor transaction.
   assert.equal(bridge.getTrackedChangeCount(), 0);
-  assert.equal(bridge.getEditorUndoClickCount(), 1);
+  assert.equal(bridge.getEditorUndoClickCount(), 0);
+  assert.equal(bridge.getDispatchCount(), 1);
+  assert.deepEqual(bridge.getNativeAcceptRequests()[0].ids, ['change-1']);
   // No per-change Accept / Reject control hunting.
   assert.equal(bridge.getAcceptClickCount(), 0);
   assert.equal(bridge.getRejectClickCount(), 0);
-  // Accept All intentionally leaves Overleaf in Editing after the replay to
-  // avoid re-tracking races; the prior Reviewing mode is NOT auto-restored.
-  assert.equal(bridge.isReviewingActive(), false);
+  assert.equal(bridge.isReviewingActive(), true, 'native Accept does not change editor mode');
 });
 
-test('page bridge acceptTrackedChanges preserves a unique unrelated suffix while replaying the run', async () => {
-  // The editor-undo cannot reach the pre-write content after a reload or a
-  // later edit. When the exact post-write checkpoint still occurs once, the
-  // snapshot fallback may safely preserve its surrounding prefix/suffix while
-  // accepting only this run's change.
+test('page bridge acceptTrackedChanges preserves a later suffix without replaying text', async () => {
+  // Native-ID acceptance preserves later untracked text verbatim.
   const bridge = createPageBridgeHarness({
     activePath: 'main.tex',
     reviewingOk: true,
@@ -1482,9 +1478,9 @@ test('page bridge acceptTrackedChanges preserves a unique unrelated suffix while
 
   assert.equal(accept.ok, true, JSON.stringify(accept));
   assert.equal(accept.skipped.length, 0, JSON.stringify(accept));
-  // The tracked run edit is replayed untracked while the later suffix remains.
+  // Only review metadata changes; the later suffix remains.
   assert.equal(bridge.getFile('main.tex'), 'alpha delta gamma plus user edit');
-  assert.equal(bridge.getEditorUndoClickCount(), 0, 'snapshot fallback is used when native undo cannot prove the checkpoint');
+  assert.equal(bridge.getEditorUndoClickCount(), 0, 'native Accept must never roll back later text');
 });
 
 test('page bridge rejects unsafe tracked-change paths before clicking reject controls', async () => {
@@ -1514,7 +1510,7 @@ test('page bridge rejects unsafe tracked-change paths before clicking reject con
   });
 
   assert.equal(write.ok, true, write.error || JSON.stringify(write));
-  assert.equal(write.trackedChanges.length, 1);
+  assert.equal(write.trackedChanges.length, 2);
 
   const undo = await bridge.call('rejectTrackedChanges', {
     trackedChanges: [
@@ -1570,7 +1566,7 @@ test('page bridge records tracked changes for each edited file in a Reviewing wr
   });
 
   assert.equal(write.ok, true, write.error || JSON.stringify(write));
-  assert.deepEqual(Array.from(write.trackedChanges, change => change.path).sort(), ['main.tex', 'refs.bib']);
+  assert.deepEqual(Array.from(new Set(Array.from(write.trackedChanges, change => change.path))).sort(), ['main.tex', 'refs.bib']);
   assert.equal(bridge.getFile('main.tex'), 'alpha delta gamma');
   assert.equal(bridge.getFile('refs.bib'), 'title = {New}');
 
@@ -1625,7 +1621,7 @@ test('page bridge rejects multiple tracked changes in one file newest first', as
 
   assert.equal(write.ok, true, write.error || JSON.stringify(write));
   assert.equal(bridge.getFile('main.tex'), 'alpha delta theta');
-  assert.equal(write.trackedChanges.length, 2);
+  assert.equal(write.trackedChanges.length, 4);
 
   const undo = await bridge.call('rejectTrackedChanges', {
     trackedChanges: write.trackedChanges,
@@ -1674,7 +1670,7 @@ test('page bridge uses Overleaf editor undo to revert a tracked-change batch in 
 
   assert.equal(write.ok, true, write.error || JSON.stringify(write));
   assert.equal(bridge.getFile('main.tex'), 'alpha delta theta');
-  assert.equal(write.trackedChanges.length, 1);
+  assert.equal(write.trackedChanges.length, 4);
 
   const undo = await bridge.call('rejectTrackedChanges', {
     trackedChanges: write.trackedChanges,
@@ -1700,6 +1696,9 @@ test('page bridge uses Overleaf editor undo to revert a tracked-change batch in 
 test('page bridge native undo waits when active path switches before editor content catches up', async () => {
   const bridge = createPageBridgeHarness({
     activePath: 'main.tex',
+    initialNativeChanges: [{ id: 'seed-change', path: 'main.tex',
+      before: 'alpha beta gamma', after: 'alpha delta gamma',
+      fragments: [{ p: 6, d: 'beta' }, { p: 6, i: 'delta' }] }],
     initialEditorPath: 'refs.bib',
     initialEditorCatchUpDelayMs: 180,
     reviewingOk: true,
@@ -1713,7 +1712,7 @@ test('page bridge native undo waits when active path switches before editor cont
   });
 
   const undo = await bridge.call('rejectTrackedChanges', {
-    trackedChanges: [],
+    trackedChanges: bridge.getNativeRefs('main.tex'),
     expectedFiles: [
       { path: 'main.tex', content: 'alpha beta gamma' }
     ],
@@ -1730,9 +1729,43 @@ test('page bridge native undo waits when active path switches before editor cont
   assert.equal(bridge.getEditorUndoClickCount(), 1);
 });
 
-test('page bridge native undo force-reopens a selected path whose editor document is still stale', async () => {
+test('page bridge native undo succeeds after an explicitly immediate editor recovery', async () => {
   const bridge = createPageBridgeHarness({
     activePath: 'main.tex',
+    initialNativeChanges: [{ id: 'seed-change', path: 'main.tex',
+      before: 'alpha beta gamma', after: 'alpha delta gamma',
+      fragments: [{ p: 6, d: 'beta' }, { p: 6, i: 'delta' }] }],
+    initialEditorPath: 'refs.bib',
+    initialEditorCatchUpDelayMs: 0,
+    reviewingOk: true,
+    editorUndoTargets: { 'main.tex': 'alpha beta gamma' },
+    files: { 'main.tex': 'alpha delta gamma', 'refs.bib': '@book{stale}' }
+  });
+
+  const undo = await bridge.call('rejectTrackedChanges', {
+    trackedChanges: bridge.getNativeRefs('main.tex'),
+    expectedFiles: [{ path: 'main.tex', content: 'alpha beta gamma' }],
+    postFiles: [{ path: 'main.tex', content: 'alpha delta gamma' }]
+  });
+
+  assert.equal(undo.ok, true, JSON.stringify(undo));
+  assert.equal(undo.applied.length, 1);
+  assert.equal(undo.skipped.length, 0);
+  assert.equal(undo.applied[0].result.method, 'overleaf-editor-undo');
+  assert.equal(undo.applied[0].result.verified, true);
+  assert.equal(undo.applied[0].result.verifiedContent, 'alpha beta gamma');
+  assert.equal(bridge.getFile('main.tex'), 'alpha beta gamma');
+  assert.equal(bridge.getFile('refs.bib'), '@book{stale}');
+  assert.equal(bridge.getEditorUndoClickCount(), 1);
+  assert.equal(bridge.getDispatchCount(), 0);
+});
+
+test('page bridge blocks native undo while the selected document ledger is still stale', async () => {
+  const bridge = createPageBridgeHarness({
+    activePath: 'main.tex',
+    initialNativeChanges: [{ id: 'seed-change', path: 'main.tex',
+      before: 'alpha beta gamma', after: 'alpha delta gamma',
+      fragments: [{ p: 6, d: 'beta' }, { p: 6, i: 'delta' }] }],
     initialEditorPath: 'refs.bib',
     reviewingOk: true,
     editorUndoTargets: {
@@ -1745,7 +1778,7 @@ test('page bridge native undo force-reopens a selected path whose editor documen
   });
 
   const undo = await bridge.call('rejectTrackedChanges', {
-    trackedChanges: [],
+    trackedChanges: bridge.getNativeRefs('main.tex'),
     expectedFiles: [
       { path: 'main.tex', content: 'alpha beta gamma' }
     ],
@@ -1754,12 +1787,13 @@ test('page bridge native undo force-reopens a selected path whose editor documen
     ]
   });
 
-  assert.equal(undo.ok, true, undo.error || JSON.stringify(undo));
-  assert.equal(undo.applied.length, 1);
-  assert.equal(undo.skipped.length, 0);
-  assert.equal(bridge.getEditorPath(), 'main.tex');
-  assert.equal(bridge.getFile('main.tex'), 'alpha beta gamma');
-  assert.equal(bridge.getEditorUndoClickCount(), 1);
+  assert.equal(undo.ok, false);
+  assert.equal(undo.applied.length, 0);
+  assert.equal(undo.skipped[0].result.code, 'native_ledger_not_ready');
+  assert.equal(bridge.getFile('main.tex'), 'alpha delta gamma');
+  assert.equal(bridge.getFile('refs.bib'), '@book{stale}');
+  assert.equal(bridge.getEditorUndoClickCount(), 0);
+  assert.equal(bridge.getDispatchCount(), 0);
 });
 
 test('page bridge does not use editor undo after user edits change the post-run content', async () => {
@@ -1809,7 +1843,7 @@ test('page bridge does not use editor undo after user edits change the post-run 
   assert.equal(bridge.getRejectClickCount(), 1);
 });
 
-test('page bridge can undo a reviewing write with no captured tracked-change refs', async () => {
+test('page bridge blocks native undo when captured change identities are missing', async () => {
   const bridge = createPageBridgeHarness({
     activePath: 'main.tex',
     reviewingOk: true,
@@ -1831,12 +1865,11 @@ test('page bridge can undo a reviewing write with no captured tracked-change ref
     ]
   });
 
-  assert.equal(undo.ok, true, undo.error || JSON.stringify(undo));
-  assert.equal(undo.applied.length, 1);
-  assert.equal(undo.skipped.length, 0);
-  assert.equal(undo.applied[0].result.method, 'overleaf-editor-undo');
-  assert.equal(bridge.getFile('main.tex'), 'alpha beta gamma');
-  assert.equal(bridge.getEditorUndoClickCount(), 1);
+  assert.equal(undo.ok, false);
+  assert.equal(undo.applied.length, 0);
+  assert.equal(undo.skipped[0].result.code, 'native_review_identity_unavailable');
+  assert.equal(bridge.getFile('main.tex'), 'alpha delta gamma');
+  assert.equal(bridge.getEditorUndoClickCount(), 0);
   assert.equal(bridge.getRejectClickCount(), 0);
 });
 
@@ -1845,7 +1878,7 @@ test('page bridge continues tracked-change undo after Overleaf rerenders review 
     activePath: 'main.tex',
     reviewingOk: true,
     trackChangesOnDispatch: true,
-    rerenderTrackedChangeIdsOnReject: true,
+    editorUndoTargets: { 'main.tex': 'alpha beta gamma' },
     files: {
       'main.tex': 'alpha beta gamma'
     }
@@ -1875,23 +1908,26 @@ test('page bridge continues tracked-change undo after Overleaf rerenders review 
   });
 
   assert.equal(write.ok, true, write.error || JSON.stringify(write));
-  assert.equal(write.trackedChanges.length, 2);
+  assert.equal(write.trackedChanges.length, 4);
   assert.equal(bridge.getFile('main.tex'), 'alpha delta theta');
 
+  bridge.rerenderReviewIds();
   const undo = await bridge.call('rejectTrackedChanges', {
     trackedChanges: write.trackedChanges,
     expectedFiles: [
       { path: 'main.tex', content: 'alpha beta gamma' }
-    ]
+    ],
+    postFiles: [{ path: 'main.tex', content: 'alpha delta theta' }]
   });
 
   assert.equal(undo.ok, true, undo.error || JSON.stringify(undo));
   assert.equal(bridge.getFile('main.tex'), 'alpha beta gamma');
   assert.equal(bridge.getTrackedChangeCount(), 0);
-  assert.equal(bridge.getRejectClickCount(), 2);
+  assert.equal(bridge.getRejectClickCount(), 0);
+  assert.equal(bridge.getEditorUndoClickCount(), 1);
 });
 
-test('page bridge rejects remaining tracked changes when stored refs are incomplete', async () => {
+test('page bridge blocks incomplete native fragments instead of sweeping changes', async () => {
   const bridge = createPageBridgeHarness({
     activePath: 'main.tex',
     reviewingOk: true,
@@ -1925,7 +1961,7 @@ test('page bridge rejects remaining tracked changes when stored refs are incompl
   });
 
   assert.equal(write.ok, true, write.error || JSON.stringify(write));
-  assert.equal(write.trackedChanges.length, 2);
+  assert.equal(write.trackedChanges.length, 4);
   assert.equal(bridge.getFile('main.tex'), 'alpha delta theta');
 
   const undo = await bridge.call('rejectTrackedChanges', {
@@ -1937,15 +1973,16 @@ test('page bridge rejects remaining tracked changes when stored refs are incompl
     ]
   });
 
-  assert.equal(undo.ok, true, undo.error || JSON.stringify(undo));
-  assert.equal(undo.applied.length, 2);
-  assert.equal(undo.skipped.length, 0);
-  assert.equal(bridge.getFile('main.tex'), 'alpha beta gamma');
-  assert.equal(bridge.getTrackedChangeCount(), 0);
-  assert.equal(bridge.getRejectClickCount(), 2);
+  assert.equal(undo.ok, false);
+  assert.equal(undo.applied.length, 0);
+  assert.equal(undo.skipped[0].result.code, 'native_review_scope_changed');
+  assert.equal(bridge.getFile('main.tex'), 'alpha delta theta');
+  assert.equal(bridge.getTrackedChangeCount(), 2);
+  assert.equal(bridge.getRejectClickCount(), 0);
+  assert.equal(bridge.getEditorUndoClickCount(), 0);
 });
 
-test('page bridge sweeps remaining tracked changes for old undo records without expected files', async () => {
+test('page bridge blocks incomplete old review records without expected files', async () => {
   const bridge = createPageBridgeHarness({
     activePath: 'main.tex',
     reviewingOk: true,
@@ -1979,7 +2016,7 @@ test('page bridge sweeps remaining tracked changes for old undo records without 
   });
 
   assert.equal(write.ok, true, write.error || JSON.stringify(write));
-  assert.equal(write.trackedChanges.length, 2);
+  assert.equal(write.trackedChanges.length, 4);
   assert.equal(bridge.getFile('main.tex'), 'alpha delta theta');
 
   const undo = await bridge.call('rejectTrackedChanges', {
@@ -1989,15 +2026,16 @@ test('page bridge sweeps remaining tracked changes for old undo records without 
     expectedFiles: []
   });
 
-  assert.equal(undo.ok, true, undo.error || JSON.stringify(undo));
-  assert.equal(undo.applied.length, 2);
-  assert.equal(undo.skipped.length, 0);
-  assert.equal(bridge.getFile('main.tex'), 'alpha beta gamma');
-  assert.equal(bridge.getTrackedChangeCount(), 0);
-  assert.equal(bridge.getRejectClickCount(), 2);
+  assert.equal(undo.ok, false);
+  assert.equal(undo.applied.length, 0);
+  assert.equal(undo.skipped[0].result.code, 'native_review_scope_changed');
+  assert.equal(bridge.getFile('main.tex'), 'alpha delta theta');
+  assert.equal(bridge.getTrackedChangeCount(), 2);
+  assert.equal(bridge.getRejectClickCount(), 0);
+  assert.equal(bridge.getEditorUndoClickCount(), 0);
 });
 
-test('page bridge sweeps active file tracked changes when old undo refs have no path', async () => {
+test('page bridge blocks old review records with no document path', async () => {
   const bridge = createPageBridgeHarness({
     activePath: 'main.tex',
     reviewingOk: true,
@@ -2031,7 +2069,7 @@ test('page bridge sweeps active file tracked changes when old undo refs have no 
   });
 
   assert.equal(write.ok, true, write.error || JSON.stringify(write));
-  assert.equal(write.trackedChanges.length, 2);
+  assert.equal(write.trackedChanges.length, 4);
 
   const undo = await bridge.call('rejectTrackedChanges', {
     trackedChanges: [
@@ -2043,12 +2081,13 @@ test('page bridge sweeps active file tracked changes when old undo refs have no 
     expectedFiles: []
   });
 
-  assert.equal(undo.ok, true, undo.error || JSON.stringify(undo));
-  assert.equal(undo.applied.length, 2);
-  assert.equal(undo.skipped.length, 0);
-  assert.equal(bridge.getFile('main.tex'), 'alpha beta gamma');
-  assert.equal(bridge.getTrackedChangeCount(), 0);
-  assert.equal(bridge.getRejectClickCount(), 2);
+  assert.equal(undo.ok, false);
+  assert.equal(undo.applied.length, 0);
+  assert.equal(undo.skipped[0].result.code, 'native_review_identity_unavailable');
+  assert.equal(bridge.getFile('main.tex'), 'alpha delta theta');
+  assert.equal(bridge.getTrackedChangeCount(), 2);
+  assert.equal(bridge.getRejectClickCount(), 0);
+  assert.equal(bridge.getEditorUndoClickCount(), 0);
 });
 
 test('page bridge refuses tracked-change undo when the Overleaf review marker cannot be found', async () => {
@@ -2072,7 +2111,7 @@ test('page bridge refuses tracked-change undo when the Overleaf review marker ca
   assert.equal(result.ok, false);
   assert.equal(result.applied.length, 0);
   assert.equal(result.skipped.length, 1);
-  assert.equal(result.skipped[0].result.code, 'tracked_change_not_found');
+  assert.equal(result.skipped[0].result.code, 'native_review_identity_unavailable');
   assert.equal(bridge.getFile('main.tex'), 'alpha delta gamma');
 });
 
@@ -2847,10 +2886,20 @@ function createPageBridgeHarness({
   // simulates Overleaf's hydration window where the editor module is loaded
   // but `_ide.project._id` is briefly null. The runWriteGuard retry loop
   // (100/300/700 ms) must ride out delays under ~1100 ms.
-  hydrationDelayMs = 0
+  hydrationDelayMs = 0,
+  exposeNativeLedger = true,
+  modernModeControl = false,
+  modernModeHidden = false,
+  modernModeConflict = false,
+  initialNativeChanges = [],
+  afterWriteGuard = null
 }) {
   const fileMap = new Map(Object.entries(files));
-  const trackedChanges = [];
+  const trackedChanges = initialNativeChanges.map(change => ({
+    ...change, fragments: change.fragments.map(op => ({ ...op }))
+  }));
+  const nativeAcceptRequests = [];
+  let writeGuardCalls = 0;
   let nextTrackedChangeId = 1;
   let selectedPath = activePath;
   let editorPath = initialEditorPath;
@@ -2872,11 +2921,27 @@ function createPageBridgeHarness({
   let modeMenuOpen = false;
   let modeOptionClickCount = 0;
   const documentEventListeners = [];
+  const sourceEditorNode = {
+    tagName: 'DIV',
+    className: 'cm-content',
+    isConnected: true,
+    parentElement: null,
+    get ownerDocument() { return document; },
+    get innerText() { return fileMap.get(editorPath) || ''; },
+    get textContent() { return fileMap.get(editorPath) || ''; },
+    getClientRects: () => [{ width: 640, height: 480 }],
+    getBoundingClientRect: () => ({ x: 0, y: 0, width: 640, height: 480 }),
+    getAttribute: name => name === 'aria-label' ? 'Source Editor editing' : null,
+    closest: () => null,
+    querySelectorAll: () => [],
+    focus() {}
+  };
 
-  if (initialEditorPath !== activePath && Number.isFinite(Number(initialEditorCatchUpDelayMs))) {
+  // null means no automatic recovery; only an explicit finite delay starts it.
+  if (initialEditorPath !== activePath && Number.isFinite(initialEditorCatchUpDelayMs)) {
     setTimeout(() => {
       editorPath = selectedPath;
-    }, Math.max(0, Number(initialEditorCatchUpDelayMs)));
+    }, Math.max(0, initialEditorCatchUpDelayMs));
   }
 
   const document = {
@@ -2900,12 +2965,17 @@ function createPageBridgeHarness({
       }
     },
     querySelector(selector) {
+      if (selector === 'meta[name="ol-csrfToken"]') return { getAttribute: () => JSON.stringify('test-csrf') };
+      if (selector === '.cm-content') return sourceEditorNode;
       if (/\[aria-selected="true"\]|\.selected/.test(selector)) {
         return makeTreeNode(selectedPath);
       }
       return null;
     },
     querySelectorAll(selector) {
+      if (selector === '.toolbar-editor .review-mode-switcher > .review-mode-switcher-toggle-button')
+        return modernModeControl ? [makeReviewingButton()] : [];
+      if (selector === '.cm-content') return [sourceEditorNode];
       if (/save|saving-status|save-status/i.test(selector)) {
         if (saveIndicatorNodes) {
           return saveIndicatorNodes.map(makeSaveIndicatorNode);
@@ -2925,7 +2995,7 @@ function createPageBridgeHarness({
         return [
           makeEditorUndoButton(),
           makeReviewingButton(),
-          ...trackedChanges.filter(change => change.path === selectedPath).map(makeTrackedChangeNode),
+          ...trackedChanges.filter(change => change.path === selectedPath && Date.now() >= (change.visibleAt || 0)).map(makeTrackedChangeNode),
           ...(includeLooseEditingButton ? [makeLooseEditingButton()] : []),
           ...(modeMenuOpen ? [makeModeOption('Editing'), makeModeOption('Reviewing')] : [])
         ];
@@ -2938,6 +3008,24 @@ function createPageBridgeHarness({
   };
 
   const window = {
+    document,
+    AbortController,
+    getComputedStyle: node => ({ display: node.hidden ? 'none' : 'block', visibility: 'visible', opacity: '1' }),
+    async fetch(url, options) {
+      const match = /^\/project\/([^/]+)\/doc\/([^/]+)\/changes\/accept$/.exec(String(url));
+      assert.ok(match, 'only the native ID-scoped accept endpoint is allowed');
+      assert.equal(decodeURIComponent(match[1]), window._ide.project._id);
+      assert.equal(options.method, 'POST');
+      assert.equal(options.headers['X-Csrf-Token'], 'test-csrf');
+      const ids = JSON.parse(options.body).change_ids;
+      nativeAcceptRequests.push({ docId: decodeURIComponent(match[2]), ids });
+      for (let index = trackedChanges.length - 1; index >= 0; index--) {
+        const change = trackedChanges[index];
+        if (makeStableDocId(change.path) === decodeURIComponent(match[2]) && ids.includes(change.id))
+          trackedChanges.splice(index, 1);
+      }
+      return { ok: true, status: 204 };
+    },
     location: {
       href: 'https://www.overleaf.com/project/test-project',
       origin: 'https://www.overleaf.com',
@@ -3000,7 +3088,21 @@ function createPageBridgeHarness({
   vm.runInContext(treeOperationsSource, context, { filename: 'treeOperations.js' });
   vm.runInContext(snapshotRouterSource, context, { filename: 'snapshotRouter.js' });
   vm.runInContext(binaryAssetUploaderSource, context, { filename: 'binaryAssetUploader.js' });
+  vm.runInContext(textFileCreatorSource, context, { filename: 'textFileCreator.js' });
   vm.runInContext(writeGuardSource, context, { filename: 'writeGuard.js' });
+  const createWriteGuard = window.CodexOverleafWriteGuard.create;
+  window.CodexOverleafWriteGuard = { ...window.CodexOverleafWriteGuard, create(deps) {
+    const guard = createWriteGuard(deps);
+    return { ...guard, async runWriteGuard(params) {
+      const result = await guard.runWriteGuard(params);
+      writeGuardCalls++;
+      await afterWriteGuard?.({ call: writeGuardCalls, result, window,
+        setReviewing: value => { reviewingActive = value; },
+        setFile: (filePath, content) => { fileMap.set(filePath, content); } });
+      return result;
+    } };
+  } };
+  vm.runInContext(trackedChangeCaptureSource, context, { filename: 'trackedChangeCapture.js' });
   vm.runInContext(trackedChangesLifecycleSource, context, { filename: 'trackedChangesLifecycle.js' });
   vm.runInContext(writebackRouterSource, context, { filename: 'writebackRouter.js' });
   if (realtimeObserverFactory) {
@@ -3117,6 +3219,22 @@ function createPageBridgeHarness({
     getTrackedChangeCount() {
       return trackedChanges.length;
     },
+    getNativeAcceptRequests() { return nativeAcceptRequests; },
+    getWriteGuardCalls() { return writeGuardCalls; },
+    rerenderReviewIds() {
+      trackedChanges.forEach((change, index) => { change.domId = 'rerendered-' + index; });
+    },
+    getNativeRefs(filePath) {
+      const previous = editorPath;
+      editorPath = filePath;
+      try {
+        return window.CodexOverleafTrackedChangeCapture.create({
+          getCodeMirrorEditorView: () => window._ide.editorView,
+          getTrackedChangeDocumentId: makeStableDocId,
+          normalizeSafeProjectPath: projectFiles.normalizeSafeProjectPath
+        }).prepareTrackedChangeCapture(filePath).refs;
+      } finally { editorPath = previous; }
+    },
     isReviewingActive() {
       return reviewingActive;
     }
@@ -3156,7 +3274,14 @@ function createPageBridgeHarness({
             return (fileMap.get(filePath) || '').length;
           }
         };
-        stateByPath.set(filePath, { doc });
+        const state = { doc };
+        if (exposeNativeLedger) Object.defineProperty(state, 'values', { get() {
+          return [{ ranges: { docId: makeStableDocId(filePath), comments: [],
+            changes: trackedChanges.filter(change => change.path === filePath)
+              .flatMap(change => change.fragments.map(op => ({ id: change.id, op: { ...op } })))
+          }, threads: {} }];
+        } });
+        stateByPath.set(filePath, state);
       }
       return stateByPath.get(filePath);
     }
@@ -3180,18 +3305,32 @@ function createPageBridgeHarness({
           }
           const before = fileMap.get(editorPath) || '';
           fileMap.set(editorPath, applyEditorChanges(fileMap.get(editorPath) || '', transaction.changes));
-          if (reviewingActive && trackChangesOnDispatch) {
-            const trackedChange = {
-              id: `change-${nextTrackedChangeId++}`,
-              path: editorPath,
-              before,
-              after: fileMap.get(editorPath) || ''
-            };
-            if (trackedChangeRenderDelayMs > 0) {
-              setTimeout(() => trackedChanges.push(trackedChange), trackedChangeRenderDelayMs);
-            } else {
-              trackedChanges.push(trackedChange);
+          const patches = (Array.isArray(transaction.changes) ? transaction.changes : [transaction.changes])
+            .slice().sort((a, b) => a.from - b.from);
+          // Model non-overlapping CM transactions as native delete/insert fragments.
+          // DOM rows may appear later; the ledger is independent of the viewport.
+          for (const change of trackedChanges.filter(change => change.path === editorPath)) {
+            for (const op of change.fragments) {
+              const originalPosition = op.p;
+              op.p += patches.reduce((shift, patch) => shift + (originalPosition >= patch.to
+                ? String(patch.insert || '').length - (patch.to - patch.from) : 0), 0);
             }
+          }
+          if (reviewingActive && trackChangesOnDispatch) {
+            let shift = 0;
+            const fragments = [];
+            for (const patch of patches) {
+              const p = patch.from + shift;
+              const removed = before.slice(patch.from, patch.to), inserted = String(patch.insert || '');
+              if (removed) fragments.push({ p, d: removed });
+              if (inserted) fragments.push({ p, i: inserted });
+              shift += inserted.length - (patch.to - patch.from);
+            }
+            trackedChanges.push({
+              id: `change-${nextTrackedChangeId++}`, path: editorPath,
+              before, after: fileMap.get(editorPath) || '', fragments,
+              visibleAt: Date.now() + trackedChangeRenderDelayMs
+            });
           }
         }
       }
@@ -3236,7 +3375,7 @@ function createPageBridgeHarness({
   }
 
   function makeReviewingButton() {
-    const label = reviewingButtonShowsCurrentMode
+    const label = (reviewingButtonShowsCurrentMode || modernModeControl)
       ? (reviewingActive ? 'Reviewing' : 'Editing')
       : 'Reviewing';
     return {
@@ -3244,7 +3383,15 @@ function createPageBridgeHarness({
       textContent: label,
       innerText: label,
       id: reviewingButtonShowsCurrentMode ? 'editor-mode-dropdown' : 'reviewing-mode',
-      className: reviewingButtonShowsCurrentMode ? 'editor-mode-dropdown' : 'toolbar-reviewing-button',
+      className: modernModeControl
+        ? 'review-mode-switcher-toggle-button ' + (reviewingActive ? 'reviewing' : 'editing')
+        : reviewingButtonShowsCurrentMode ? 'editor-mode-dropdown' : 'toolbar-reviewing-button',
+      ownerDocument: document,
+      isConnected: true,
+      hidden: modernModeHidden,
+      getClientRects: () => modernModeHidden ? [] : [{ width: 80, height: 24 }],
+      closest: () => null,
+      querySelector: () => ({ textContent: modernModeConflict ? (reviewingActive ? 'Editing' : 'Reviewing') : label }),
       disabled: false,
       parentElement: null,
       getAttribute(attribute) {
@@ -3303,7 +3450,8 @@ function createPageBridgeHarness({
         editorUndoClickCount += 1;
         if (Object.prototype.hasOwnProperty.call(editorUndoTargets, selectedPath)) {
           fileMap.set(selectedPath, editorUndoTargets[selectedPath]);
-          trackedChanges.splice(0, trackedChanges.length);
+          for (let index = trackedChanges.length - 1; index >= 0; index--)
+            if (trackedChanges[index].path === selectedPath) trackedChanges.splice(index, 1);
         }
       },
       dispatchEvent() {
@@ -3435,23 +3583,24 @@ function createPageBridgeHarness({
   }
 
   function makeTrackedChangeNode(change) {
+    const rowId = change.domId || change.id;
     return {
       tagName: 'DIV',
-      textContent: `Tracked change ${change.id}`,
-      innerText: `Tracked change ${change.id}`,
-      id: `tracked-${change.id}`,
+      textContent: `Tracked change ${rowId}`,
+      innerText: `Tracked change ${rowId}`,
+      id: `tracked-${rowId}`,
       className: 'review-change-row track-change',
       disabled: false,
       parentElement: null,
       getAttribute(attribute) {
         if (attribute === 'data-change-id' || attribute === 'data-review-id') {
-          return change.id;
+          return rowId;
         }
         if (attribute === 'data-path') {
           return change.path;
         }
         if (attribute === 'aria-label' || attribute === 'title') {
-          return `Tracked change ${change.id}`;
+          return `Tracked change ${rowId}`;
         }
         return '';
       },
@@ -3722,4 +3871,75 @@ test('compileBridge fetch wrapper is install-once via a page-window sentinel (B7
     'compile-bridge state must persist on a page-window sentinel across re-injection');
   assert.match(src, /if \(state\.wrappedFetch && pageWindow\.fetch === state\.wrappedFetch\)\s*\{[\s\S]*?return/,
     'interceptCompileRequests must bail when our wrapper is already installed');
+});
+
+test('page bridge modern mode dropdown must select Editing before no-trace undo', async () => {
+  const bridge = createPageBridgeHarness({
+    activePath: 'main.tex', files: { 'main.tex': 'after' }, reviewingOk: true,
+    modernModeControl: true, reviewingClickBehavior: 'menu', exposeReviewingActiveState: false
+  });
+  const result = await bridge.call('applyOperations', {
+    reviewingPolicy: 'no-trace-undo', baseFiles: [{ path: 'main.tex', content: 'after' }],
+    operations: [{ type: 'edit', path: 'main.tex', replaceAll: 'before' }]
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(bridge.getFile('main.tex'), 'before');
+  assert.equal(bridge.isReviewingActive(), false);
+  assert.equal(bridge.getModeOptionClickCount(), 1, 'opening the menu alone must not confirm Editing');
+  assert.equal(bridge.getDispatchCount(), 1);
+});
+
+for (const [label, extra] of [
+  ['hidden', { modernModeHidden: true }],
+  ['conflicting', { modernModeConflict: true }]
+]) test('page bridge modern ' + label + ' mode control blocks no-trace undo', async () => {
+  const bridge = createPageBridgeHarness({
+    activePath: 'main.tex', files: { 'main.tex': 'after' }, reviewingOk: false,
+    modernModeControl: true, reviewingClickBehavior: 'noop', ...extra
+  });
+  const result = await bridge.call('applyOperations', {
+    reviewingPolicy: 'no-trace-undo', baseFiles: [{ path: 'main.tex', content: 'after' }],
+    operations: [{ type: 'edit', path: 'main.tex', replaceAll: 'before' }]
+  });
+  assert.equal(result.ok, false);
+  assert.equal(bridge.getFile('main.tex'), 'after');
+  assert.equal(bridge.getDispatchCount(), 0);
+});
+
+test('page bridge no-trace undo rechecks actual project after waiting for Editing', async () => {
+  const bridge = createPageBridgeHarness({
+    activePath: 'main.tex', files: { 'main.tex': 'after' }, reviewingOk: false,
+    modernModeControl: true,
+    afterWriteGuard({ call, window }) {
+      // Same path and identical text in a different project must still be blocked.
+      if (call === 2) window._ide.project._id = 'other-project';
+    }
+  });
+  const result = await bridge.call('applyOperations', {
+    reviewingPolicy: 'no-trace-undo', baseFiles: [{ path: 'main.tex', content: 'after' }],
+    operations: [{ type: 'edit', path: 'main.tex', replaceAll: 'before' }]
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.skipped[0].result.code, 'aborted_project_changed');
+  assert.ok(bridge.getWriteGuardCalls() >= 3);
+  assert.equal(bridge.getFile('main.tex'), 'after');
+  assert.equal(bridge.getDispatchCount(), 0);
+});
+
+for (const [label, mutate, code] of [
+  ['content', ({ setFile }) => setFile('main.tex', 'later user edit'), 'stale_source_changed'],
+  ['mode', ({ setReviewing }) => setReviewing(true), 'editing_not_confirmed']
+]) test('page bridge no-trace undo rechecks ' + label + ' after async project guard', async () => {
+  const bridge = createPageBridgeHarness({
+    activePath: 'main.tex', files: { 'main.tex': 'after' }, reviewingOk: false,
+    modernModeControl: true,
+    afterWriteGuard(context) { if (context.call === 3) mutate(context); }
+  });
+  const result = await bridge.call('applyOperations', {
+    reviewingPolicy: 'no-trace-undo', baseFiles: [{ path: 'main.tex', content: 'after' }],
+    operations: [{ type: 'edit', path: 'main.tex', replaceAll: 'before' }]
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.skipped[0].result.code, code);
+  assert.equal(bridge.getDispatchCount(), 0);
 });

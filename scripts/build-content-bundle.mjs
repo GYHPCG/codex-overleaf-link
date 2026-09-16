@@ -55,20 +55,6 @@ export function buildContentBundle(options = {}) {
     ].join('\n');
   }).join('\n\n');
 
-  const result = buildSync({
-    ...BUILD_OPTIONS,
-    absWorkingDir: rootDir,
-    outfile: outputPath,
-    stdin: {
-      contents: `${compatibilitySource}\n\n/* content entry bootstrap */\n${entryBody}`,
-      loader: 'js',
-      resolveDir: rootDir,
-      sourcefile: 'extension/entries/content-entry.mjs'
-    },
-    metafile: true,
-    logLevel: options.logLevel || 'silent'
-  });
-
   const inputs = [
     'extension/entries/content-entry.mjs',
     ...importedRelativePaths
@@ -83,6 +69,26 @@ export function buildContentBundle(options = {}) {
   sourceHash.update(JSON.stringify(BUILD_OPTIONS));
   sourceHash.update('\0');
   sourceHash.update(readPinnedEsbuildVersion(rootDir));
+  const sourceDigest = sourceHash.digest('hex');
+
+  buildSync({
+    ...BUILD_OPTIONS,
+    absWorkingDir: rootDir,
+    outfile: outputPath,
+    stdin: {
+      contents: `${compatibilitySource}\n\n/* content entry bootstrap */\n${entryBody}`,
+      loader: 'js',
+      resolveDir: rootDir,
+      sourcefile: 'extension/entries/content-entry.mjs'
+    },
+    // A diagnostic identity of the executing code, not a fetch of whichever
+    // files happen to be installed later. Never use this DOM value as authority.
+    banner: {
+      js: `if (typeof document !== 'undefined' && document.documentElement) document.documentElement.setAttribute('data-codex-overleaf-source-digest', ${JSON.stringify(sourceDigest)});`
+    },
+    metafile: true,
+    logLevel: options.logLevel || 'silent'
+  });
 
   const outputBytes = fs.readFileSync(outputPath);
   const outputText = outputBytes.toString('utf8');
@@ -108,7 +114,7 @@ export function buildContentBundle(options = {}) {
     schemaVersion: 1,
     entry: 'extension/entries/content-entry.mjs',
     output: CONTENT_BUNDLE_RELATIVE_PATH,
-    sourceDigest: sourceHash.digest('hex'),
+    sourceDigest,
     outputDigest: crypto.createHash('sha256').update(outputBytes).digest('hex'),
     byteLength: outputBytes.length,
     inputs
@@ -139,6 +145,7 @@ if (path.resolve(process.argv[1] || '') === scriptPath) {
       `Built ${path.relative(defaultRootDir, result.outputPath)} ` +
       `(${result.metadata.byteLength} bytes, ${result.metadata.inputs.length} inputs).`
     );
+    console.log(`Expected runtime source fingerprint: ${result.metadata.sourceDigest}`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

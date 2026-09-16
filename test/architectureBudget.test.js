@@ -58,6 +58,8 @@ test('architecture budget tracks v1.0 final split targets for the largest files'
       ['extension/src/shared/managedUpdateProjection.js', 340],
       ['extension/src/page/writebackRouter.js', 1950],
       ['extension/src/page/trackedChangesLifecycle.js', 1650],
+      ['extension/src/page/trackedChangeCapture.js', 350],
+      ['extension/src/content/trackedChangeCaptureController.js', 190],
       ['extension/src/page/treeOperations.js', 1650],
       ['extension/src/shared/storageDb.js', 1360],
       ['native-host/src/nativeTransportEnvelope.js', 180],
