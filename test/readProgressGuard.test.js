@@ -177,17 +177,19 @@ function writeFakeCodexRepeatedReads(tempDir) {
 }
 
 test('stdin pagination without a proven file never creates shared range coverage', () => {
-  const guard = createReadProgressGuard({ workspacePath: '/qa' });
+  const workspacePath = path.resolve('/qa');
+  const guard = createReadProgressGuard({ workspacePath });
   for (let index = 0; index < 8; index += 1) {
     const command = "rg -n 'topic" + index + "' section" + index + ".tex | sed -n '1,240p'";
     assert.equal(extractBoundedRange(command), null);
-    assert.equal(extractReadInspection({ type: 'commandExecution', command }, '/qa'), null);
+    assert.equal(extractReadInspection({ type: 'commandExecution', command }, workspacePath), null);
     assert.equal(guard.observe({ type: 'commandExecution', command }).action, 'none');
   }
   assert.equal(extractBoundedRange("sed -n '1,240p'"), null);
   assert.equal(extractBoundedRange("sed -n '1,240p' -"), null);
-  const metadata = extractReadInspection(readItem("nl -ba Thesis.tex | sed -n '48,68p'", '/qa/Thesis.tex'), '/qa');
-  assert.equal(metadata.fileKey, path.resolve('/qa/Thesis.tex'));
+  const thesisPath = path.join(workspacePath, 'Thesis.tex');
+  const metadata = extractReadInspection(readItem("nl -ba Thesis.tex | sed -n '48,68p'", thesisPath), workspacePath);
+  assert.equal(metadata.fileKey, thesisPath);
   assert.equal(metadata.range, null);
 });
 
