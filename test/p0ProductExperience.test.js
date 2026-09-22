@@ -4823,8 +4823,11 @@ test('Recent-projects variant renders a welcome header, list container, and sett
   assert.match(src, /data-recent-projects-list/);
   assert.match(src, /data-recent-projects-empty/);
   assert.match(src, /data-recent-projects-degraded/);
-  // The variant pulls rows from the T3 cross-project query.
-  assert.match(src, /listRecentProjectsAcrossAccount/);
+  // The dashboard loads one account-scoped snapshot and applies deletion visibility.
+  assert.match(src, /function loadDashboardConversations/);
+  assert.match(src, /StorageDb\.getAllSessions\(\)/);
+  assert.match(src, /SessionPersistence\.loadTombstones\(\)/);
+  assert.match(src, /SessionPersistence\.isVisibleRecord\(record,[^\n]+scope\)/);
   // Opportunistic enrichment runs as best-effort and must not block render.
   assert.match(src, /opportunisticEnrichmentFromDom/);
 });
@@ -4931,18 +4934,26 @@ test('Recent-projects bilingual strings: en + zh both define welcome / empty / d
 
 test('Recent-projects CSS variant + badge styles reuse panel palette tokens for all 10 statuses', () => {
   const css = fs.readFileSync(path.join(__dirname, '..', 'extension', 'styles', 'panel.css'), 'utf8');
-  // Variant container + row + disabled-row styles per spec §5.3 / §5.4 / §5.8.
+  // Conversation rows and the focused continuation card share the panel palette.
   assert.match(css, /\[data-recent-projects-list\]/);
-  assert.match(css, /\[data-recent-projects-row\]/);
-  // All ten badge variants — class naming mirrors the JS STATUS_BADGE_CLASS
-  // map. The renderer adds these classes onto the row badge span.
+  assert.match(css, /\.recent-projects-session-row\s*\{/);
+  assert.match(css, /\.recent-projects-focus\s*\{/);
+  // All ten variants remain covered. Neutral states inherit the shared muted
+  // badge rules; actionable and terminal states retain their semantic overrides.
   for (const cls of [
     'badge-pending', 'badge-accepted', 'badge-rejected', 'badge-needs-review',
     'badge-running', 'badge-completed', 'badge-failed',
     'badge-background-completed', 'badge-needs-review-after-navigation',
     'badge-abandoned-after-navigation'
   ]) {
-    assert.ok(css.indexOf(cls) !== -1, 'panel.css must style .' + cls);
+    if (cls === 'badge-pending' || cls === 'badge-rejected') {
+      assert.match(css, /\.recent-projects-row-badge\s*\{[^}]*color:\s*var\(--tl-fg-3\)/,
+        cls + ' must inherit the muted base label color');
+      assert.match(css, /\.recent-projects-row-badge\[data-status\]::before\s*\{[^}]*color:\s*var\(--tl-fg-3\)/,
+        cls + ' must inherit the shared neutral status marker');
+    } else {
+      assert.ok(css.indexOf(cls) !== -1, 'panel.css must style .' + cls);
+    }
   }
 });
 

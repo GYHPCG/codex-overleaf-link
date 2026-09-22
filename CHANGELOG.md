@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.4.1 - 2026-09-22
+
+### Changed
+
+- Make the Overleaf homepage a conversation dashboard with one focused continuation card, compact history, project filters, and a separate group for unstarted conversations.
+- Preserve account isolation, deleted-session filtering, manual titles, and exact conversation destinations while simplifying homepage typography and spacing.
+- Distinguish general settings from project settings in both languages, and show site-wide storage usage without misleading current-project counts on the homepage.
+
+### Fixed
+
+- Stop treating stdin-piped or ambiguous reads as repeated reads of a shared placeholder file, and keep read-progress evidence scoped to the active parent thread and turn.
+- Count post-steer repetition only after steering is acknowledged, and reset read-progress pressure when real edits occur.
+- Reject late approvals and results while stopping a run, wait for local process-group shutdown, and explicitly report an unconfirmed stop instead of silently assuming termination.
+- Preserve literal file names such as `notes.tex`, `notebook.tex`, and `article.tex` when resolving the Overleaf file tree; read file labels separately from icon text.
+- Ignore delayed storage estimates after the settings scope changes.
+
+### Compatibility
+
+- Keep the existing Bootstrap protocol, permissions, and runtime dependencies unchanged.
+- Preserve existing Track, Accept, Undo, and write-safety decisions; this patch changes file identification rather than those algorithms.
+
 ## v2.4.0 - 2026-09-16
 
 ### Changed

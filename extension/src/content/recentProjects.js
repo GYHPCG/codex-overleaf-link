@@ -34,6 +34,7 @@
   // (the row renderer is sync). The async loader populates this on panel
   // mount and on each opportunistic enrichment call.
   let projectNameCacheMirror = {};
+  let dashboardRenderGeneration = 0;
 
   function loadProjectNameCacheFromStorage() {
     return new Promise(function (resolve) {
@@ -140,7 +141,7 @@
         // If the variant is currently visible, refresh row names in place.
         var visibleList = getPanel() && getPanel().querySelector('[data-recent-projects-list]');
         if (visibleList) {
-          var rows = visibleList.querySelectorAll('[data-recent-projects-row]');
+          var rows = visibleList.querySelectorAll('[data-project-id]');
           for (var k = 0; k < rows.length; k++) {
             var row = rows[k];
             var rowPid = row.getAttribute('data-project-id');
@@ -149,6 +150,7 @@
               var cached = lookupProjectName(rowPid);
               if (cached) {
                 nameEl.textContent = cached;
+                nameEl.title = cached;
               }
             }
           }
@@ -229,64 +231,55 @@
     var hr = Math.round(min / 60);
     if (hr < 24) return tx(hr + ' hr ago', hr + ' 小时前');
     var day = Math.round(hr / 24);
-    if (day < 30) return tx(day + ' day ago', day + ' 天前');
+    if (day < 30) return tx(day + (day === 1 ? ' day ago' : ' days ago'), day + ' 天前');
     var month = Math.round(day / 30);
     if (month < 12) return tx(month + ' mo ago', month + ' 个月前');
     var year = Math.round(month / 12);
     return tx(year + ' yr ago', year + ' 年前');
   }
 
-  function textNode(text, className) {
-    var el = document.createElement('span');
-    if (className) {
-      el.className = className;
-    }
-    el.textContent = text == null ? '' : String(text);
+  function createViewElement(tag, className, text) {
+    var el = document.createElement(tag);
+    if (className) el.className = className;
+    if (text !== undefined) el.textContent = text;
     return el;
   }
 
-  function renderWelcomeHeader(stats) {
-    var el = document.createElement('div');
-    el.className = 'recent-projects-welcome';
+  function createViewButton(label, onClick, attribute, className) {
+    var button = createViewElement('button', className, label);
+    button.type = 'button';
+    if (attribute) button.setAttribute(attribute, '');
+    if (onClick) button.addEventListener('click', onClick);
+    return button;
+  }
+
+  function textNode(text, className) {
+    return createViewElement('span', className, text == null ? '' : String(text));
+  }
+
+  function renderWelcomeHeader() {
+    var el = createViewElement('div', 'recent-projects-welcome');
     el.setAttribute('data-recent-projects-welcome', '');
-    var title = document.createElement('div');
-    title.className = 'recent-projects-welcome-title';
-    title.textContent = tr('recentProjects_welcome');
-    var subtitle = document.createElement('div');
-    subtitle.className = 'recent-projects-welcome-subtitle';
-    // v1.8.1: the most expensive spot on the first screen now carries a
-    // glanceable summary instead of boilerplate once the rows are known.
-    subtitle.textContent = stats && stats.projectCount
-      ? tr('recentProjects_welcome_stats', { projects: stats.projectCount, sessions: stats.sessionTotal })
-      : tr('recentProjects_welcome_subtitle');
-    el.appendChild(title);
-    el.appendChild(subtitle);
+    el.appendChild(textNode('CODEX', 'recent-projects-eyebrow'));
+    el.appendChild(textNode(tr('recentProjects_welcome'), 'recent-projects-welcome-title'));
+    el.appendChild(textNode(tr('recentProjects_welcome_subtitle'), 'recent-projects-welcome-subtitle'));
     return el;
   }
 
   function renderEmptyState() {
-    var el = document.createElement('div');
-    el.className = 'recent-projects-empty';
+    var el = createViewElement('div', 'recent-projects-empty', tr('recentProjects_empty'));
     el.setAttribute('data-recent-projects-empty', '');
-    el.textContent = tr('recentProjects_empty');
     return el;
   }
 
   function renderDegradedState() {
-    var el = document.createElement('div');
-    el.className = 'recent-projects-degraded';
+    var el = createViewElement('div', 'recent-projects-degraded');
     el.setAttribute('data-recent-projects-degraded', '');
     // v1.8.1: the user IS signed in on /project — telling them to sign in
     // was a dead end. Explain the real condition and offer a retry.
-    var hint = document.createElement('div');
-    hint.textContent = tr('recentProjects_degraded_hint');
+    var hint = createViewElement('div', '', tr('recentProjects_degraded_hint'));
     el.appendChild(hint);
-    var retry = document.createElement('button');
-    retry.type = 'button';
-    retry.className = 'recent-projects-show-all';
-    retry.setAttribute('data-recent-projects-retry', '');
-    retry.textContent = tr('recentProjects_retryScope');
-    retry.addEventListener('click', function () {
+    var retry = createViewButton(tr('recentProjects_retryScope'), function () {
       if (typeof refreshAccountScopeId === 'function') {
         Promise.resolve(refreshAccountScopeId())
           .then(function () { return renderRecentProjectsVariant(); })
@@ -294,7 +287,7 @@
       } else {
         renderRecentProjectsVariant();
       }
-    });
+    }, 'data-recent-projects-retry', 'recent-projects-show-all');
     el.appendChild(retry);
     return el;
   }
@@ -304,18 +297,11 @@
   // skills tied to projects, custom instructions, project diagnostics).
   function renderSettingsEntry(options) {
     var scope = options && options.scope === 'account' ? 'account' : 'project';
-    var entry = document.createElement('button');
-    entry.type = 'button';
-    entry.className = 'recent-projects-settings-entry';
-    entry.setAttribute('data-recent-projects-settings-entry', '');
-    entry.setAttribute('data-settings-scope', scope);
-    var label = document.createElement('span');
-    label.className = 'recent-projects-settings-entry-label';
-    label.textContent = tr('recentProjects_settings_entry');
-    entry.appendChild(label);
-    entry.addEventListener('click', function () {
+    var entry = createViewButton(undefined, function () {
       openSettingsInScope(scope);
-    });
+    }, 'data-recent-projects-settings-entry', 'recent-projects-settings-entry');
+    entry.setAttribute('data-settings-scope', scope);
+    entry.appendChild(textNode(tr('recentProjects_settings_entry'), 'recent-projects-settings-entry-label'));
     return entry;
   }
 
@@ -360,10 +346,8 @@
       ? status
       : 'pending';
     var cls = STATUS_BADGE_CLASS[safeStatus];
-    var el = document.createElement('span');
-    el.className = 'recent-projects-row-badge ' + cls;
+    var el = textNode(tr('recentProjects_badge_' + safeStatus), 'recent-projects-row-badge ' + cls);
     el.setAttribute('data-status', safeStatus);
-    el.textContent = tr('recentProjects_badge_' + safeStatus);
     return el;
   }
 
@@ -378,123 +362,143 @@
     window.location.assign('https://www.overleaf.com/project/' + encodeURIComponent(projectId));
   }
 
+  function renderActionsMenu(buttons) {
+    var menu = createViewElement('details', 'recent-projects-menu');
+    var trigger = createViewElement('summary', '', '\u22ef');
+    trigger.title = tr('recentProjects_more');
+    trigger.setAttribute('aria-label', tr('recentProjects_more'));
+    var actions = document.createElement('div');
+    actions.setAttribute('data-recent-menu-actions', '');
+    buttons.forEach(function (button) { actions.appendChild(button); });
+    actions.addEventListener('click', function (event) {
+      if (event.target.closest('button')) {
+        menu.open = false;
+        trigger.focus();
+      }
+    }, true);
+    menu.appendChild(trigger);
+    menu.appendChild(actions);
+    menu.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        menu.open = false;
+        trigger.focus();
+      }
+    });
+    menu.addEventListener('focusout', function (event) {
+      if (event.relatedTarget && !menu.contains(event.relatedTarget)) menu.open = false;
+    });
+    return menu;
+  }
+
+  function conversationActivity(record) {
+    return String(record && (record.lastActivityAt || record.updatedAt || record.createdAt) || '');
+  }
+
+  function conversationHasContent(record) {
+    return ['runs', 'history', 'pendingInputs'].some(function (key) {
+      return Array.isArray(record[key]) && record[key].length > 0;
+    }) || ['task', 'safeTaskSummary', 'codexThreadId'].some(function (key) {
+      return typeof record[key] === 'string' && Boolean(record[key].trim());
+    }) || (record.titleSource === 'manual' && typeof record.title === 'string' && Boolean(record.title.trim()));
+  }
+
+  function conversationStatus(record) {
+    if (!StorageDb || !Array.isArray(record.runs) || !record.runs.length) return '';
+    return settleDashboardRunStatus(StorageDb.derivePrimaryStatusBadge(record), conversationActivity(record));
+  }
+
+  function projectDisplayName(projectId) {
+    return lookupProjectName(projectId) || (isValidProjectId(projectId)
+      ? tr('recentProjects_unnamed', { prefix: projectId.slice(0, 8) })
+      : tr('recentProjects_row_projectLinkUnavailable'));
+  }
+
+  async function loadDashboardConversations(scope) {
+    if (!scope || !StorageDb) throw new Error('Conversation storage is unavailable.');
+    var results = await Promise.all([StorageDb.getAllSessions(), SessionPersistence.loadTombstones()]);
+    var records = results[0];
+    var deletedByProject = results[1] || {};
+    if (!Array.isArray(records)) throw new Error('Conversation history could not be read.');
+    return records.filter(function (record) {
+      if (!record || typeof record.id !== 'string' || !record.id || record.accountScopeUnavailable === true) return false;
+      var deletedIds = Object.prototype.hasOwnProperty.call(deletedByProject, record.projectId)
+        ? deletedByProject[record.projectId] : [];
+      return SessionPersistence.isVisibleRecord(record, Array.isArray(deletedIds) ? deletedIds : [], scope);
+    }).sort(function (a, b) {
+      var aTime = Date.parse(conversationActivity(a)) || 0;
+      var bTime = Date.parse(conversationActivity(b)) || 0;
+      return bTime - aTime || String(a.id).localeCompare(String(b.id));
+    });
+  }
+
+  function dashboardViewOptions() {
+    var root = getPanel() && getPanel().querySelector('[data-recent-projects-root]');
+    var drafts = root && root.querySelector('[data-unstarted-conversations]');
+    return {
+      accountScopeId: root && root.dataset.accountScopeId || '',
+      projectFilter: root && root.dataset.projectFilter || '',
+      showAll: Boolean(root && root.dataset.showAll === 'true'),
+      draftsOpen: Boolean(drafts && drafts.open),
+      restoreScrollTop: root ? root.scrollTop : 0
+    };
+  }
+
+  async function refreshDashboardView() {
+    var panelEl = getPanel();
+    if (panelEl && panelEl.dataset.view === 'recent-projects') {
+      await renderRecentProjectsVariant(dashboardViewOptions());
+    }
+  }
+
+  async function openDashboardConversation(projectId, record, row) {
+    var scope = record.accountScopeId;
+    var panelEl = getPanel();
+    if (!scope || scope !== getCachedAccountScopeId() || !isValidProjectId(projectId)
+      || !panelEl || panelEl.dataset.view !== 'recent-projects' || row.getAttribute('aria-busy') === 'true') return;
+    row.setAttribute('aria-busy', 'true');
+    var resume = row.querySelector('[data-session-resume]');
+    if (resume) resume.disabled = true;
+    try {
+      var records = await loadProjectSessionRecords(projectId);
+      if (scope !== getCachedAccountScopeId() || panelEl !== getPanel()
+        || panelEl.dataset.view !== 'recent-projects' || row.isConnected === false) return;
+      var selected = records.find(function (candidate) { return candidate.id === record.id; });
+      if (!selected) {
+        await refreshDashboardView();
+        showPluginToast(tr('recentProjects_conversationGone'), { status: 'warning' });
+        return;
+      }
+      await activateSessionAndOpenProject(projectId, selected);
+    } catch (_error) {
+      if (scope === getCachedAccountScopeId() && row.isConnected !== false) {
+        showPluginToast(tr('recentProjects_continueFailed'), { status: 'warning' });
+      }
+    } finally {
+      row.removeAttribute('aria-busy');
+      if (resume) resume.disabled = false;
+    }
+  }
+
+  // Kept as a compatibility entry point and as the recovery path for invalid project links.
   function renderRecentProjectRow(row) {
     var projectId = row && row.projectId;
     var valid = isValidProjectId(projectId);
-    var el = document.createElement('button');
-    el.type = 'button';
-    el.className = 'recent-projects-row';
-    el.setAttribute('data-recent-projects-row', '');
-    el.setAttribute('data-project-id', projectId || '');
-    if (!valid) {
-      el.disabled = true;
-      el.setAttribute('aria-disabled', 'true');
-    }
-    var name = lookupProjectName(projectId);
-    if (!name) {
-      name = isValidProjectId(projectId)
-        ? tr('recentProjects_unnamed', { prefix: projectId.slice(0, 8) })
-        : tr('recentProjects_row_projectLinkUnavailable');
-    }
-    var nameNode = textNode(name, 'recent-projects-row-name');
-    nameNode.title = name;
-    el.appendChild(nameNode);
-    var rowTime = textNode(formatRelativeTime(row && row.lastActivityAt), 'recent-projects-row-time');
-    rowTime.setAttribute('data-rel-time', String(row && row.lastActivityAt || ''));
-    el.appendChild(rowTime);
-    // v1.8.2: the session count lives in the row meta, matching its type
-    // scale, instead of inflating the expand toggle.
-    var sessionCount = Number(row && row.sessionCount) || 0;
-    if (sessionCount > 1) {
-      el.appendChild(textNode(tr('recentProjects_sessionsCount', { count: sessionCount }), 'recent-projects-row-sessions'));
-    }
-    el.appendChild(renderStatusBadge(settleDashboardRunStatus(row && row.primaryStatusBadge, row && row.lastActivityAt)));
-    if (valid) {
-      el.addEventListener('click', function () {
-        openProjectFromRow(projectId);
-      });
-    } else {
-      el.appendChild(textNode(tr('recentProjects_row_projectLinkUnavailable'), 'recent-projects-row-warning'));
-    }
-    if (!valid) {
-      var deadWrap = document.createElement('div');
-      deadWrap.className = 'recent-projects-row-wrap';
-      var deadHead = document.createElement('div');
-      deadHead.className = 'recent-projects-row-head';
-      var cleanup = document.createElement('button');
-      cleanup.type = 'button';
-      cleanup.className = 'recent-projects-row-cleanup';
-      cleanup.setAttribute('data-row-cleanup', '');
-      cleanup.title = tr('recentProjects_cleanup');
-      cleanup.setAttribute('aria-label', tr('recentProjects_cleanup'));
-      cleanup.textContent = '×';
-      cleanup.addEventListener('click', function () {
-        cleanupDeadProjectEntry(projectId).catch(function () { /* swallow */ });
-      });
-      deadHead.appendChild(el);
-      deadHead.appendChild(cleanup);
-      deadWrap.appendChild(deadHead);
-      return deadWrap;
-    }
-    var wrap = document.createElement('div');
-    wrap.className = 'recent-projects-row-wrap';
-    wrap.setAttribute('data-project-row-wrap', projectId);
-    var expand = document.createElement('button');
-    expand.type = 'button';
-    expand.className = 'recent-projects-row-expand';
-    expand.setAttribute('data-row-expand', '');
-    expand.setAttribute('aria-expanded', 'false');
-    // v1.8.1 a11y: tie the toggle to the container it reveals.
-    var sessionsElId = 'codex-project-sessions-' + String(projectId || '').slice(0, 24);
-    expand.setAttribute('aria-controls', sessionsElId);
-    expand.title = tr('recentProjects_sessions_toggle');
-    expand.setAttribute('aria-label', tr('recentProjects_sessions_toggle'));
-    expand.textContent = tr('recentProjects_sessions_action');
-    var head = document.createElement('div');
-    head.className = 'recent-projects-row-head';
-    var clear = document.createElement('button');
-    clear.type = 'button';
-    clear.className = 'recent-projects-row-clear';
-    clear.setAttribute('data-project-clear', '');
-    clear.title = tr('recentProjects_clearProject');
-    clear.setAttribute('aria-label', tr('recentProjects_clearProject'));
-    clear.textContent = '×';
-    clear.addEventListener('click', function (event) {
-      event.stopPropagation();
-      projectSessionCleanup.clearProjectSessions(projectId, name).catch(function () { /* surfaced by the action */ });
-    });
-    head.appendChild(el);
-    head.appendChild(expand);
-    head.appendChild(clear);
-    var sessionsEl = document.createElement('div');
-    sessionsEl.className = 'recent-projects-sessions';
-    sessionsEl.setAttribute('data-project-sessions', '');
-    sessionsEl.id = sessionsElId;
-    sessionsEl.setAttribute('role', 'region');
-    sessionsEl.setAttribute('aria-label', tr('recentProjects_sessions_toggle'));
-    sessionsEl.hidden = true;
-    expand.addEventListener('click', function () {
-      toggleProjectSessions(wrap, projectId);
-    });
-    wrap.appendChild(head);
-    wrap.appendChild(sessionsEl);
+    var wrap = createViewElement('div', 'recent-projects-row-wrap recent-projects-unavailable-row');
+    wrap.setAttribute('data-project-id', projectId || '');
+    var link = createViewButton(undefined, null, 'data-recent-projects-row', 'recent-projects-row');
+    link.setAttribute('data-project-id', projectId || '');
+    link.disabled = !valid;
+    link.appendChild(textNode(projectDisplayName(projectId), 'recent-projects-row-name'));
+    if (valid) link.addEventListener('click', function () { openProjectFromRow(projectId); });
+    var cleanup = createViewButton(tr(valid ? 'recentProjects_clearProject' : 'recentProjects_cleanup'), function () {
+      if (valid) projectSessionCleanup.clearProjectSessions(projectId, projectDisplayName(projectId)).catch(function () {});
+      else cleanupDeadProjectEntry(projectId).catch(function () {});
+    }, valid ? 'data-project-clear' : 'data-row-cleanup');
+    wrap.appendChild(link);
+    wrap.appendChild(renderActionsMenu([cleanup]));
     return wrap;
-  }
-
-  function toggleProjectSessions(wrap, projectId) {
-    var sessionsEl = wrap.querySelector('[data-project-sessions]');
-    var expand = wrap.querySelector('[data-row-expand]');
-    if (!sessionsEl || !expand) {
-      return;
-    }
-    var opening = sessionsEl.hidden;
-    sessionsEl.hidden = !opening;
-    expand.setAttribute('aria-expanded', opening ? 'true' : 'false');
-    expand.textContent = tr(opening ? 'recentProjects_sessions_action_open' : 'recentProjects_sessions_action');
-    wrap.setAttribute('data-expanded', opening ? 'true' : 'false');
-    if (opening) {
-      renderProjectSessions(sessionsEl, projectId).catch(function () { /* swallow */ });
-    }
   }
 
   function sessionRecordDisplayTitle(record) {
@@ -520,94 +524,86 @@
       });
   }
 
-  async function renderProjectSessions(sessionsEl, projectId) {
-    sessionsEl.innerHTML = '';
-    var sessionsLoading = document.createElement('div');
-    sessionsLoading.className = 'recent-projects-loading';
-    sessionsLoading.textContent = tx('Loading sessions…', '正在加载会话…');
-    sessionsEl.appendChild(sessionsLoading);
-    var records = [];
-    try {
-      records = await loadProjectSessionRecords(projectId);
-    } catch (_error) {
-      records = [];
-    }
-    sessionsLoading.remove();
-    if (!records.length) {
-      sessionsEl.appendChild(textNode(tr('recentProjects_sessions_empty'), 'recent-projects-sessions-empty'));
-      return;
-    }
-    for (var i = 0; i < records.length; i++) {
-      sessionsEl.appendChild(renderProjectSessionRow(sessionsEl, projectId, records[i]));
-    }
-  }
-
-  function renderProjectSessionRow(sessionsEl, projectId, record) {
+  function renderProjectSessionRow(sessionsEl, projectId, record, options) {
+    var featured = Boolean(options && options.featured);
     var running = Boolean(StorageDb)
       && settleDashboardRunStatus(StorageDb.derivePrimaryStatusBadge(record), record.updatedAt || record.lastActivityAt) === 'running';
-    var row = document.createElement('div');
-    row.className = 'recent-projects-session-row';
+    var row = createViewElement('div', 'recent-projects-session-row' + (featured ? ' recent-projects-focus' : ''));
     row.setAttribute('data-project-session-row', record.id);
-    if (running) {
-      row.setAttribute('data-running', 'true');
-    }
+    row.setAttribute('data-project-id', projectId);
+    if (running) row.setAttribute('data-running', 'true');
     var title = textNode(sessionRecordDisplayTitle(record), 'recent-projects-session-title');
-    title.title = sessionRecordDisplayTitle(record);
-    var time = textNode(formatRelativeTime(record.updatedAt || record.createdAt), 'recent-projects-session-time');
-    time.setAttribute('data-rel-time', String(record.updatedAt || record.createdAt || ''));
-    var rename = document.createElement('button');
-    rename.type = 'button';
-    rename.className = 'recent-projects-session-action';
-    rename.setAttribute('data-session-rename-dash', '');
-    rename.title = tr('renameSession');
-    rename.setAttribute('aria-label', tr('renameSession'));
-    rename.textContent = '✎';
-    var del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'recent-projects-session-action recent-projects-session-action--delete';
-    del.setAttribute('data-session-delete-dash', '');
-    del.title = tr('deleteSession');
-    del.setAttribute('aria-label', tr('deleteSession'));
-    del.textContent = '×';
-    if (running) {
-      // Recently-touched running sessions may genuinely be live in another
-      // tab: keep rename locked, but let delete through a stronger confirm
-      // instead of a permanent dead-end (fleet: zombie sessions were
-      // undeletable from the very surface built to manage them).
-      rename.disabled = true;
-      del.title = tr('recentProjects_zombieRunningNote');
+    title.title = title.textContent;
+    var copy = createViewElement('div', 'recent-projects-session-copy');
+    var meta = createViewElement('div', 'recent-projects-session-meta');
+    var project = textNode(projectDisplayName(projectId), 'recent-projects-row-name');
+    project.title = project.textContent;
+    meta.appendChild(project);
+    var time = textNode(formatRelativeTime(conversationActivity(record)), 'recent-projects-session-time');
+    time.setAttribute('data-rel-time', conversationActivity(record));
+    time.title = conversationActivity(record);
+    var status = conversationStatus(record);
+    var footer = featured ? createViewElement('div', 'recent-projects-focus-footer') : null;
+    if (featured) {
+      meta.insertBefore(textNode(tr('recentProjects_focusEyebrow'), 'recent-projects-focus-eyebrow'), project);
+      copy.appendChild(meta);
+      copy.appendChild(title);
+      footer.appendChild(status ? renderStatusBadge(status)
+        : textNode(tr('recentProjects_savedDraft'), 'recent-projects-row-badge'));
+    } else {
+      copy.appendChild(title);
+      copy.appendChild(meta);
+      if (['failed', 'needs_review', 'interrupted', 'stale', 'needs_review_after_navigation', 'abandoned_after_navigation'].indexOf(status) !== -1) {
+        var attention = textNode(tr('recentProjects_attention'), 'recent-projects-session-attention');
+        attention.title = tr('recentProjects_badge_' + status);
+        meta.appendChild(attention);
+      }
     }
-    rename.addEventListener('click', function () {
+    meta.appendChild(time);
+    row.appendChild(copy);
+
+    var rename = createViewButton(tr('renameSession'), function () {
       beginDashboardSessionRename(sessionsEl, projectId, record, row, title);
-    });
-    del.addEventListener('click', function () {
-      deleteDashboardSession(sessionsEl, projectId, record).catch(function () { /* swallow */ });
-    });
-    row.appendChild(title);
-    row.appendChild(time);
-    row.appendChild(rename);
-    row.appendChild(del);
-    // v1.8.1 O2: session rows were click-dead. Clicking one now records it
-    // as the project's active session (the pref the editor reads on load)
-    // and opens the project straight into it.
-    row.classList.add('recent-projects-session-row--linked');
-    row.setAttribute('role', 'button');
-    row.tabIndex = 0;
-    var activate = function () {
-      activateSessionAndOpenProject(projectId, record).catch(function () { /* navigation is best-effort */ });
-    };
-    row.addEventListener('click', function (event) {
-      if (event.target.closest('button') || event.target.closest('input')) {
-        return;
-      }
-      activate();
-    });
-    row.addEventListener('keydown', function (event) {
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        activate();
-      }
-    });
+    }, 'data-session-rename-dash');
+    rename.title = rename.textContent;
+    rename.setAttribute('aria-label', rename.textContent);
+    if (running) rename.disabled = true;
+    var del = createViewButton(tr('deleteSession'), function () {
+      deleteDashboardSession(sessionsEl, projectId, record).catch(function () {});
+    }, 'data-session-delete-dash');
+    del.title = running ? tr('recentProjects_zombieRunningNote') : del.textContent;
+    del.setAttribute('aria-label', del.textContent);
+    var projectConversations = createViewButton(tr('recentProjects_projectConversations'), function () {
+      renderRecentProjectsVariant({ projectFilter: projectId, showAll: true, restoreScrollTop: 0 }).catch(function () {});
+    }, 'data-project-conversations');
+    var openProject = createViewButton(tr('recentProjects_openProject'), function () { openProjectFromRow(projectId); });
+    var clear = createViewButton(tr('recentProjects_clearProject'), function () {
+      projectSessionCleanup.clearProjectSessions(projectId, projectDisplayName(projectId)).catch(function () {});
+    }, 'data-project-clear');
+    row.appendChild(renderActionsMenu([rename, del, projectConversations, openProject, clear]));
+
+    var activate = function () { openDashboardConversation(projectId, record, row).catch(function () {}); };
+    if (featured) {
+      row.setAttribute('role', 'group');
+      row.setAttribute('aria-label', tr('recentProjects_focusEyebrow'));
+      var resume = createViewButton(tr('recentProjects_continue'), activate, 'data-session-resume', 'recent-projects-continue');
+      resume.title = tr('recentProjects_continueHint');
+      footer.appendChild(resume);
+      row.appendChild(footer);
+    } else {
+      row.classList.add('recent-projects-session-row--linked');
+      row.setAttribute('role', 'button');
+      row.tabIndex = 0;
+      row.addEventListener('click', function (event) {
+        if (!event.target.closest('button, input, details')) activate();
+      });
+      row.addEventListener('keydown', function (event) {
+        if (event.target === row && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          activate();
+        }
+      });
+    }
     return row;
   }
 
@@ -757,16 +753,7 @@
     } catch (error) {
       showPluginToast(tr('deleteSessionHistoryFailedToast', { message: error.message }), { status: 'warning', sticky: true });
     }
-    // Re-render the whole variant so the row summary/badge reflect the
-    // deletion, then restore this project's expanded session list.
-    // v1.8.1: refresh the whole variant so the row's session count, badge,
-    // summary and the welcome stats all stay fresh — but restore the scroll
-    // position and this project's expanded list so the delete feels in-place.
-    var rootForScroll = getPanel() && getPanel().querySelector('[data-recent-projects-root]');
-    await renderRecentProjectsVariant({
-      expandProjectId: projectId,
-      restoreScrollTop: rootForScroll ? rootForScroll.scrollTop : undefined
-    });
+    await refreshDashboardView();
   }
 
   function beginDashboardSessionRename(sessionsEl, projectId, record, row, titleEl) {
@@ -780,7 +767,7 @@
     input.className = 'recent-projects-session-rename-input';
     input.value = seed;
     titleEl.hidden = true;
-    row.insertBefore(input, titleEl);
+    titleEl.parentElement.insertBefore(input, titleEl);
     input.focus();
     input.select();
     var settled = false;
@@ -839,7 +826,7 @@
         })));
       }
     } catch (_error) { /* swallow */ }
-    await renderProjectSessions(sessionsEl, projectId);
+    await refreshDashboardView();
   }
 
   function ensureRecentProjectsRoot() {
@@ -850,9 +837,13 @@
     if (existing) {
       return existing;
     }
-    var rootEl = document.createElement('section');
-    rootEl.className = 'recent-projects-root';
+    var rootEl = createViewElement('section', 'recent-projects-root');
     rootEl.setAttribute('data-recent-projects-root', '');
+    rootEl.addEventListener('click', function (event) {
+      rootEl.querySelectorAll('.recent-projects-menu[open]').forEach(function (menu) {
+        if (!menu.contains(event.target)) menu.open = false;
+      });
+    });
     // Insert as a sibling of the existing per-project main / composer slots
     // so the variant lives inside the panel root (page-scoped) and the
     // existing data-view CSS rules can hide it when the per-project view is
@@ -901,133 +892,141 @@
       return;
     }
     rootEl.appendChild(renderWelcomeHeader());
-    var loading = document.createElement('div');
-    loading.className = 'recent-projects-loading';
-    loading.textContent = tx('Loading projects\u2026', '正在加载项目…');
+    var loading = createViewElement('div', 'recent-projects-loading', tx('Loading projects\u2026', '正在加载项目…'));
     rootEl.appendChild(loading);
   }
 
   async function renderRecentProjectsVariant(options) {
-    if (!getPanel()) {
-      return;
-    }
-    // Toggle panel into recent-projects mode. Page-scoped: never replaces
-    // top-level page DOM. The existing data-view-driven CSS hides per-
-    // project regions when the panel root carries this value.
-    getPanel().dataset.view = 'recent-projects';
+    var panelEl = getPanel();
+    var editorMatch = String(window.location && window.location.pathname || '').match(/^\/project\/([a-f0-9]{24})(?:\/|$)/);
+    if (!panelEl || (editorMatch && isValidProjectId(editorMatch[1]))) return;
+    var previous = dashboardViewOptions();
+    options = Object.assign({}, previous, options || {});
+    var generation = ++dashboardRenderGeneration;
+    panelEl.dataset.view = 'recent-projects';
     startRelativeTimeTicker();
     var rootEl = ensureRecentProjectsRoot();
-    if (!rootEl) {
-      return;
+    if (!rootEl) return;
+    var accountScopeId = (window.codexOverleafDeriveAccountScopeId || function () { return null; })();
+    if (previous.accountScopeId !== accountScopeId) {
+      options.projectFilter = '';
+      options.showAll = options.draftsOpen = false;
     }
+    var projectFilter = isValidProjectId(options.projectFilter) ? options.projectFilter : '';
+    rootEl.dataset.accountScopeId = accountScopeId || '';
+    rootEl.dataset.projectFilter = projectFilter;
+    rootEl.dataset.showAll = options.showAll ? 'true' : 'false';
     rootEl.innerHTML = '';
     rootEl.appendChild(renderWelcomeHeader());
-
-    var accountScopeId = (window.codexOverleafDeriveAccountScopeId || function () { return null; })();
     if (!accountScopeId) {
       rootEl.appendChild(renderDegradedState());
       rootEl.appendChild(renderSettingsEntry({ scope: 'account' }));
-      opportunisticEnrichmentFromDom().catch(function () { /* swallow */ });
       return;
     }
-
-    var listContainer = document.createElement('div');
-    listContainer.className = 'recent-projects-list';
+    if (projectFilter) {
+      var filterBar = createViewElement('div', 'recent-projects-filter');
+      var back = createViewButton(tr('recentProjects_allProjects'), function () {
+        renderRecentProjectsVariant({ projectFilter: '', showAll: false, restoreScrollTop: 0 }).catch(function () {});
+      });
+      filterBar.appendChild(back);
+      var filterName = textNode(projectDisplayName(projectFilter));
+      filterName.title = filterName.textContent;
+      filterBar.appendChild(filterName);
+      rootEl.appendChild(filterBar);
+    }
+    var listContainer = createViewElement('div', 'recent-projects-list');
     listContainer.setAttribute('data-recent-projects-list', '');
     rootEl.appendChild(listContainer);
-
-    // Slow IndexedDB reads must not render as "no projects": show a loading
-    // line for the await window below (cleared before rows/empty render).
-    var listLoading = document.createElement('div');
-    listLoading.className = 'recent-projects-loading';
-    listLoading.textContent = tx('Loading projects…', '正在加载项目…');
-    listContainer.appendChild(listLoading);
-
-    // Pre-warm the project-name cache mirror so the synchronous
-    // `lookupProjectName` calls inside `renderRecentProjectRow` see the
-    // latest data the first time the variant renders.
+    var loading = textNode(tr('recentProjects_loadingHistory'), 'recent-projects-loading');
+    listContainer.appendChild(loading);
+    function stillCurrent() {
+      return generation === dashboardRenderGeneration && getPanel() === panelEl
+        && panelEl.dataset.view === 'recent-projects' && rootEl.isConnected !== false
+        && getCachedAccountScopeId() === accountScopeId;
+    }
+    var records;
     try {
       await loadProjectNameCacheFromStorage();
-    } catch (_error) { /* swallow; fall back to empty mirror */ }
-
-    var rows = [];
-    var showAll = Boolean(options && options.showAll);
-    // Fetch one extra row beyond the fold so "show all" only renders when
-    // there really is more than one page of projects.
-    var pageLimit = 10;
-    try {
-      if (StorageDb) {
-        var deletedSessionIdsByProject = await SessionPersistence.loadTombstones();
-        rows = await StorageDb.listRecentProjectsAcrossAccount({
-          accountScopeId: accountScopeId,
-          limit: showAll ? 500 : pageLimit + 1,
-          deletedSessionIdsByProject: deletedSessionIdsByProject
+      records = await loadDashboardConversations(accountScopeId);
+    } catch (_error) {
+      if (!stillCurrent()) return;
+      loading.textContent = tr('recentProjects_loadFailed');
+      var retry = createViewButton(tr('recentProjects_retryScope'), function () {
+        renderRecentProjectsVariant(options).catch(function () {});
+      }, null, 'recent-projects-show-all');
+      listContainer.appendChild(retry);
+      rootEl.appendChild(renderSettingsEntry({ scope: 'account' }));
+      return;
+    }
+    if (!stillCurrent()) return;
+    loading.remove();
+    var validRecords = records.filter(function (record) {
+      return isValidProjectId(record.projectId) && (!projectFilter || record.projectId === projectFilter);
+    });
+    var started = validRecords.filter(conversationHasContent);
+    var unstarted = validRecords.filter(function (record) { return !conversationHasContent(record); });
+    if (started.length) {
+      listContainer.appendChild(renderProjectSessionRow(listContainer, started[0].projectId, started[0], { featured: true }));
+      if (started.length > 1) {
+        var heading = createViewElement('div', 'recent-projects-history-heading');
+        heading.appendChild(textNode(tr('recentProjects_historyHeading')));
+        heading.appendChild(textNode(tr('recentProjects_historyHint')));
+        listContainer.appendChild(heading);
+        var historyList = createViewElement('div', 'recent-projects-history-list');
+        var history = options.showAll ? started.slice(1) : started.slice(1, 10);
+        history.forEach(function (record) {
+          historyList.appendChild(renderProjectSessionRow(historyList, record.projectId, record));
+        });
+        listContainer.appendChild(historyList);
+        if (!options.showAll && started.length > 10) {
+          var more = createViewButton(tr('recentProjects_showAllConversations', { count: started.length }), function () {
+            renderRecentProjectsVariant({ showAll: true }).catch(function () {});
+          }, 'data-recent-projects-show-all', 'recent-projects-show-all');
+          listContainer.appendChild(more);
+        }
+      }
+    } else {
+      var empty = renderEmptyState();
+      if (unstarted.length) empty.textContent = tr('recentProjects_noStarted');
+      listContainer.appendChild(empty);
+    }
+    if (unstarted.length) {
+      var drafts = createViewElement('details', 'recent-projects-drafts');
+      drafts.setAttribute('data-unstarted-conversations', '');
+      var summary = createViewElement('summary', '', tr('recentProjects_unstarted', { count: unstarted.length }));
+      drafts.appendChild(summary);
+      var draftsBuilt = false;
+      function populateDrafts() {
+        if (draftsBuilt || !stillCurrent()) return;
+        draftsBuilt = true;
+        drafts.appendChild(textNode(tr('recentProjects_unstartedHint'), 'recent-projects-drafts-hint'));
+        unstarted.forEach(function (record) {
+          drafts.appendChild(renderProjectSessionRow(drafts, record.projectId, record));
         });
       }
-    } catch (_error) {
-      rows = [];
+      drafts.addEventListener('toggle', function () { if (drafts.open) populateDrafts(); });
+      listContainer.appendChild(drafts);
+      if (options.draftsOpen) { drafts.open = true; populateDrafts(); }
     }
-
-    listLoading.remove();
-    // v1.8.1 P2: a refresh must not clobber what the user had open — restore
-    // every previously-expanded project and the scroll position.
-    var restoreExpanded = Array.isArray(options && options.restoreExpanded) ? options.restoreExpanded : [];
-    // v1.8.1 O1: fill the welcome subtitle with a real summary now that the
-    // rows are known (header was painted before the async read).
-    var welcomeSubtitle = rootEl.querySelector('.recent-projects-welcome-subtitle');
-    if (welcomeSubtitle && rows && rows.length) {
-      var sessionTotal = 0;
-      for (var st = 0; st < rows.length; st++) {
-        sessionTotal += Number(rows[st].sessionCount) || 1;
-      }
-      welcomeSubtitle.textContent = tr('recentProjects_welcome_stats', {
-        projects: rows.length,
-        sessions: sessionTotal
+    if (!projectFilter) {
+      var invalid = records.filter(function (record) { return !isValidProjectId(record.projectId); });
+      var invalidIds = new Set();
+      if (invalid.length) listContainer.appendChild(textNode(tr('recentProjects_unavailableRecords'), 'recent-projects-history-heading'));
+      invalid.forEach(function (record) {
+        var id = String(record.projectId || '');
+        if (!invalidIds.has(id)) {
+          invalidIds.add(id);
+          listContainer.appendChild(renderRecentProjectRow({ projectId: record.projectId }));
+        }
       });
-    }
-    var hasMore = !showAll && rows && rows.length > pageLimit;
-    var visibleRows = hasMore ? rows.slice(0, pageLimit) : rows;
-    if (!visibleRows || !visibleRows.length) {
-      listContainer.appendChild(renderEmptyState());
-    } else {
-      for (var i = 0; i < visibleRows.length; i++) {
-        listContainer.appendChild(renderRecentProjectRow(visibleRows[i]));
-      }
-    }
-    if (hasMore) {
-      var showAllButton = document.createElement('button');
-      showAllButton.type = 'button';
-      showAllButton.className = 'recent-projects-show-all';
-      showAllButton.setAttribute('data-recent-projects-show-all', '');
-      showAllButton.textContent = tx('Show all projects', '查看全部项目');
-      showAllButton.addEventListener('click', function () {
-        renderRecentProjectsVariant(Object.assign({}, options, { showAll: true }));
-      });
-      listContainer.appendChild(showAllButton);
     }
     rootEl.appendChild(renderSettingsEntry({ scope: 'account' }));
-    var expandProjectId = options && options.expandProjectId;
-    var toReopen = restoreExpanded.slice();
-    if (expandProjectId && toReopen.indexOf(expandProjectId) === -1) {
-      toReopen.push(expandProjectId);
-    }
-    for (var reopenIndex = 0; reopenIndex < toReopen.length; reopenIndex++) {
-      var wrap = listContainer.querySelector('[data-project-row-wrap="' + toReopen[reopenIndex] + '"]');
-      if (wrap) {
-        toggleProjectSessions(wrap, toReopen[reopenIndex]);
-      }
-    }
-    if (options && Number.isFinite(options.restoreScrollTop)) {
-      rootEl.scrollTop = options.restoreScrollTop;
-      var scrollerParent = rootEl.parentElement;
-      if (scrollerParent && scrollerParent.scrollHeight > scrollerParent.clientHeight) {
-        scrollerParent.scrollTop = options.restoreScrollTop;
-      }
-    }
-    opportunisticEnrichmentFromDom().catch(function () { /* swallow */ });
+    if (Number.isFinite(options.restoreScrollTop)) rootEl.scrollTop = options.restoreScrollTop;
+    opportunisticEnrichmentFromDom().catch(function () {});
   }
 
   function renderPerProjectVariant() {
+    dashboardRenderGeneration++;
     // Per-project mount: ensure the panel view attribute is back on the
     // session view and the variant root is detached so the per-project DOM
     // is the only thing visible. The existing applyStateToPanel path renders

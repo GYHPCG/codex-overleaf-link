@@ -1052,7 +1052,7 @@
       return labelPath;
     }
 
-    const textPath = normalizeProjectPathCandidate(node.textContent || '');
+    const textPath = normalizeProjectPathCandidate(readFileTreeNodeText(node));
     if (!textPath) {
       const docIdPath = resolveProjectPathFromDomDocId(node);
       const domTreePath = resolveProjectPathFromDomTree(node);
@@ -1181,7 +1181,7 @@
       node.getAttribute?.('data-name'),
       node.getAttribute?.('aria-label'),
       node.getAttribute?.('title'),
-      node.textContent || ''
+      readFileTreeNodeText(node)
     ];
     for (const value of candidates) {
       const path = normalizeProjectPathCandidate(value);
@@ -1244,21 +1244,12 @@
   }
 
   function normalizeProjectPathCandidate(value) {
-    const text = normalizeDomText(value);
+    const text = String(value || '').trim();
     if (!text || hasMultipleTextPathExtensions(text)) {
       return '';
     }
-    const candidates = [
-      stripOverleafIconAffixes(text),
-      text
-    ];
-    for (const candidate of candidates) {
-      const normalized = normalizeSafeProjectPath(candidate);
-      if (normalized && window.CodexOverleafProjectFiles.isTextProjectPath(normalized)) {
-        return normalized;
-      }
-    }
-    return '';
+    const normalized = normalizeSafeProjectPath(text);
+    return normalized && window.CodexOverleafProjectFiles.isTextProjectPath(normalized) ? normalized : '';
   }
 
   function normalizeDomText(value) {
@@ -1275,19 +1266,11 @@
     return false;
   }
 
-  function stripOverleafIconAffixes(value) {
-    let text = normalizeDomText(value);
-    for (let index = 0; index < 4; index += 1) {
-      const next = text
-        .replace(/^(?:description|article|book_5|insert_drive_file|draft|text_snippet|note|chevron_right|expand_more|folder_open|folder)+/i, '')
-        .replace(/(?:more_vert\s*Menu|more_vert|Menu)$/i, '')
-        .trim();
-      if (next === text) {
-        break;
-      }
-      text = next;
-    }
-    return text;
+  function readFileTreeNodeText(node) {
+    // Icon ligatures can be valid filename prefixes; use the actual label.
+    const names = Array.from(node.querySelectorAll?.('.item-name') || []);
+    if (names.length > 1) return '';
+    return names.length === 1 ? names[0].textContent || '' : node.textContent || '';
   }
 
   function inferPathFromTreeAncestors(node, fileName) {

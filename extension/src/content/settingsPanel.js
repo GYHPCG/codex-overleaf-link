@@ -38,8 +38,8 @@
         <div class="codex-custom-instructions-head">
           <button type="button" data-settings-back title="Back" aria-label="Back">‹</button>
           <div>
-            <div class="codex-custom-instructions-title" data-i18n="projectSettingsTitle">Project Settings</div>
-            <div class="codex-custom-instructions-subtitle" data-i18n="projectSettingsSubtitle">Customize how Codex behaves in this and all projects.</div>
+            <div class="codex-custom-instructions-title" data-settings-title data-i18n="projectSettingsTitle">Project Settings</div>
+            <div class="codex-custom-instructions-subtitle" data-settings-subtitle data-i18n="projectSettingsSubtitle">Customize how Codex behaves in this and all projects.</div>
           </div>
         </div>
         <div class="codex-project-settings-status" data-project-settings-status></div>
@@ -304,12 +304,25 @@
     if (!root) {
       return;
     }
+    refreshSettingsScope(instance, root);
     const button = getButton(instance);
     if (button) {
       button.dataset.active = 'true';
       button.setAttribute('aria-expanded', 'true');
     }
     root.querySelector('[data-custom-instructions-input]')?.focus?.();
+  }
+
+  function refreshSettingsScope(instance, root) {
+    const accountScope = instance.container?.closest?.('[data-settings-scope]')?.dataset?.settingsScope === 'account';
+    const prefix = accountScope ? 'recentProjects_settings' : 'projectSettings';
+    for (const [selector, suffix] of [['[data-settings-title]', 'Title'], ['[data-settings-subtitle]', 'Subtitle']]) {
+      const label = root.querySelector(selector);
+      if (!label) continue;
+      const key = prefix + suffix;
+      label.setAttribute('data-i18n', key);
+      label.textContent = t(instance, key);
+    }
   }
 
   function hide(target) {
@@ -346,6 +359,7 @@
     if (!root) {
       return;
     }
+    refreshSettingsScope(instance, root);
     if (Object.prototype.hasOwnProperty.call(state, 'customInstructions')) {
       const input = root.querySelector('[data-custom-instructions-input]');
       if (input) {

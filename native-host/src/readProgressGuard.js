@@ -19,6 +19,36 @@ function buildReadProgressRules() {
   ].join('\n');
 }
 
+function createRunEventScope(getTurn = () => ({})) {
+  const owners = new Map();
+  const identity = params => ({
+    threadId: String(params?.threadId || params?.thread?.id || ''),
+    turnId: String(params?.turnId || params?.turn?.id || '')
+  });
+  const itemId = params => String(params?.itemId || params?.item?.id || '');
+  const matches = owner => {
+    const active = getTurn() || {};
+    return (!owner.threadId || owner.threadId === active.threadId)
+      && (!owner.turnId || !active.turnId || owner.turnId === active.turnId);
+  };
+  return {
+    accepts(params = {}) {
+      const owner = identity(params);
+      const id = itemId(params);
+      if (owner.threadId || owner.turnId) {
+        if (id) owners.set(id, owner);
+        return matches(owner);
+      }
+      return !owners.has(id) || matches(owners.get(id));
+    },
+    owns(params = {}) {
+      const explicit = identity(params);
+      const owner = explicit.threadId || explicit.turnId ? explicit : owners.get(itemId(params));
+      return Boolean((getTurn() || {}).turnId && owner?.threadId && matches(owner));
+    }
+  };
+}
+
 function createReadProgressGuard(options = {}) {
   const settings = {
     minReadCommands: positiveInteger(options.minReadCommands, DEFAULT_MIN_READ_COMMANDS),
@@ -37,11 +67,19 @@ function createReadProgressGuard(options = {}) {
   let redundantStreak = 0;
   let postSteerRedundantStreak = 0;
   let steerIssued = false;
+  let steerAcknowledged = false;
   let abortIssued = false;
 
   return {
     observe(item) {
       if (abortIssued) return noAction();
+      if (item?.type === 'fileChange') {
+        coverageByFile.clear();
+        commandCounts.clear();
+        readCount = redundantStreak = postSteerRedundantStreak = 0;
+        steerIssued = steerAcknowledged = false;
+        return noAction();
+      }
       const inspection = extractReadInspection(item, settings.workspacePath);
       if (!inspection) {
         if (item?.type === 'commandExecution') {
@@ -52,8 +90,9 @@ function createReadProgressGuard(options = {}) {
       }
 
       readCount += 1;
-      const signatureCount = (commandCounts.get(inspection.signature) || 0) + 1;
-      commandCounts.set(inspection.signature, signatureCount);
+      const signatureKey = inspection.fileKey + '\0' + inspection.signature;
+      const signatureCount = (commandCounts.get(signatureKey) || 0) + 1;
+      commandCounts.set(signatureKey, signatureCount);
       let overlapRatio = 0;
       let redundant = signatureCount > 1;
 
@@ -85,6 +124,7 @@ function createReadProgressGuard(options = {}) {
       });
 
       if (steerIssued) {
+        if (!steerAcknowledged) return noAction(evidence);
         postSteerRedundantStreak = redundant ? postSteerRedundantStreak + 1 : 0;
         if (postSteerRedundantStreak >= settings.postSteerRedundantStreak) {
           abortIssued = true;
@@ -101,12 +141,20 @@ function createReadProgressGuard(options = {}) {
       return noAction(evidence);
     },
 
+    acknowledgeSteer() {
+      if (steerIssued && !abortIssued) {
+        steerAcknowledged = true;
+        postSteerRedundantStreak = 0;
+      }
+    },
+
     snapshot() {
       return {
         readCount,
         redundantStreak,
         postSteerRedundantStreak,
         steerIssued,
+        steerAcknowledged,
         abortIssued
       };
     }
@@ -120,9 +168,15 @@ function createReadProgressController({ input = {}, request, fail, getTurn, emit
   });
   let pendingSteer = null;
   let steerInFlight = false;
+  let generation = 0;
 
   return {
     observe(item) {
+      if (item?.type === 'fileChange') {
+        generation += 1;
+        pendingSteer = null;
+        steerInFlight = false;
+      }
       const decision = guard.observe(item);
       if (decision.action === 'steer') {
         steer(decision);
@@ -153,6 +207,7 @@ function createReadProgressController({ input = {}, request, fail, getTurn, emit
       return;
     }
     steerInFlight = true;
+    const steerGeneration = generation;
     emitEvent('codex.no_progress.steered', 'Repeated file reads detected; asking Codex to synthesize', {
       ...decision.evidence,
       guardAction: 'steer'
@@ -165,7 +220,10 @@ function createReadProgressController({ input = {}, request, fail, getTurn, emit
         text: buildReadProgressSteerText(decision.evidence, input.mode),
         text_elements: []
       }]
+    }).then(() => {
+      if (steerGeneration === generation) guard.acknowledgeSteer();
     }).catch(error => {
+      if (steerGeneration !== generation) return;
       const progressError = createNoProgressError(decision.evidence);
       progressError.message += ` Automatic steering failed: ${String(error?.message || error).slice(0, 500)}`;
       fail(progressError);
@@ -175,30 +233,35 @@ function createReadProgressController({ input = {}, request, fail, getTurn, emit
 
 function extractReadInspection(item = {}, workspacePath = '') {
   if (item.type !== 'commandExecution') return null;
+  if (item.status && item.status !== 'completed') return null;
+  if (Number.isInteger(item.exitCode) && item.exitCode !== 0) return null;
   const command = String(item.command || '').trim();
   if (!command) return null;
+  const cwd = typeof item.cwd === 'string' && item.cwd ? path.resolve(workspacePath || '.', item.cwd) : workspacePath;
   const actions = Array.isArray(item.commandActions) ? item.commandActions : [];
-  const readAction = actions.find(action => action?.type === 'read');
-  if (!readAction && !looksLikeReadCommand(command)) return null;
-
+  const readActions = actions.filter(action => action?.type === 'read');
+  if (!readActions.length && !looksLikeReadCommand(command)) return null;
+  const paths = [...new Set(readActions.map(action => normalizeFileKey(action.path, cwd)).filter(Boolean))];
+  if (paths.length > 1) return null;
   const bounded = extractBoundedRange(command);
-  const rawPath = bounded?.path || readAction?.path || '';
-  const fileKey = normalizeFileKey(rawPath, workspacePath);
-  const displayPath = safeDisplayPath(fileKey, workspacePath) || path.basename(fileKey) || 'project file';
-  const range = bounded
-    ? { startLine: bounded.startLine, endLine: bounded.endLine }
-    : null;
+  const boundedKey = normalizeFileKey(bounded?.path, cwd);
+  if (boundedKey && paths[0] && boundedKey !== paths[0]) return null;
+  const fileKey = paths[0] || boundedKey;
+  if (!fileKey) return null;
   return {
-    fileKey: fileKey || displayPath,
-    displayPath,
-    range,
+    fileKey,
+    displayPath: safeDisplayPath(fileKey, workspacePath) || path.basename(fileKey),
+    range: bounded && boundedKey === fileKey
+      ? { startLine: bounded.startLine, endLine: bounded.endLine } : null,
     signature: normalizeCommandSignature(command, workspacePath)
   };
 }
 
 function extractBoundedRange(command) {
   const source = String(command || '');
-  const sedMatch = source.match(/\bsed\s+(?:-[A-Za-z]+\s+)*["']?(\d+)\s*,\s*(\d+)p["']?(?:\s+((?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s;&|]+)))?/i);
+  // Stream pagination and compound commands do not prove source-file ranges.
+  if (/[|;&<>\x60]/.test(source)) return null;
+  const sedMatch = source.match(/\bsed\s+(?:-[A-Za-z]+\s+)*["']?(\d+)\s*,\s*(\d+)p["']?\s+((?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s;&|]+))/i);
   if (sedMatch) {
     return normalizeRangeMatch(sedMatch[1], sedMatch[2], sedMatch[3]);
   }
@@ -212,13 +275,15 @@ function extractBoundedRange(command) {
 function normalizeRangeMatch(startValue, endValue, pathValue) {
   const startLine = Number(startValue);
   const endLine = Number(endValue);
+  const filePath = unquoteShellWord(pathValue);
+  if (!filePath || filePath === '-') return null;
   if (!Number.isSafeInteger(startLine) || !Number.isSafeInteger(endLine) || startLine < 1 || endLine < startLine) {
     return null;
   }
   return {
     startLine,
     endLine,
-    path: unquoteShellWord(pathValue)
+    path: filePath
   };
 }
 
@@ -228,8 +293,9 @@ function looksLikeReadCommand(command) {
 }
 
 function normalizeFileKey(value, workspacePath) {
+  if (typeof value !== 'string') return '';
   const source = unquoteShellWord(value);
-  if (!source) return '';
+  if (!source || source === '-' || source.startsWith('~') || /[$\x60*?\[\]{}]/.test(source)) return '';
   if (path.isAbsolute(source)) return path.normalize(source);
   return path.resolve(workspacePath || '.', source);
 }
@@ -355,6 +421,7 @@ module.exports = {
   createNoProgressError,
   createReadProgressController,
   createReadProgressGuard,
+  createRunEventScope,
   extractBoundedRange,
   extractReadInspection
 };

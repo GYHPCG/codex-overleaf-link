@@ -25,12 +25,14 @@ const { createSubagentBroker } = require('./subagentBroker');
 const { prepareBinaryAssetChanges } = require('./nativeAssetTransfer');
 const { resolveCodexCommand, shouldUseShellForCommand } = require('./codexCommand');
 const { applyProviderEnvironment, buildProviderConfigArgs, prepareProviderLaunch } = require('./codexProviderLaunch');
-const { buildReadProgressRules, createReadProgressController } = require('./readProgressGuard');
+const { buildReadProgressRules, createReadProgressController, createRunEventScope } = require('./readProgressGuard');
 const {
   createCodexIdleWatchdog,
   createOptionalTimeout,
   getAbortReason,
   parseOptionalPositiveInteger,
+  rejectPendingRequests,
+  stopCodexAppServer,
   throwIfAborted
 } = require('./codexSessionTiming');
 
@@ -806,23 +808,26 @@ function runCodexAppServerProcess(input) {
     const child = spawn(codexCommand, buildCodexAppServerArgs(input), {
       env: childEnv,
       shell: shouldUseShellForCommand(codexCommand, childEnv),
+      detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe']
     });
     const pending = new Map();
     let nextId = 1;
     let stdoutBuffer = '';
     let stderr = '';
-    let activeThreadId = '';
+    let activeThreadId = String(input.threadId || '');
     let activeTurnId = '';
     let controlPublished = false;
     const assistantMessages = new Map();
     const assistantMessageOrder = [];
+    const eventScope = createRunEventScope(() => ({ threadId: activeThreadId, turnId: activeTurnId }));
     const readProgressController = createReadProgressController({
       input, request, fail,
       getTurn: () => ({ threadId: activeThreadId, turnId: activeTurnId }),
       emitEvent: (...args) => emitCodexEvent(input.emit, ...args)
     });
     let settled = false;
+    let stopping = false;
     // Two-layer timeout strategy:
     //   1. Optional absolute deadline (CODEX_OVERLEAF_CODEX_TIMEOUT_MS) —
     //      legacy override; off by default. When set, the whole run must
@@ -847,23 +852,14 @@ function runCodexAppServerProcess(input) {
       }
       fail(new Error(`Codex app-server produced no events for ${ms}ms (idle watchdog); the run was aborted to release the project lock.`));
     });
-    const onAbort = () => {
-      const reason = getAbortReason(input.signal);
-      if (!activeThreadId || !activeTurnId) {
-        fail(reason);
-        return;
-      }
-      Promise.race([
-        interruptActiveTurn().catch(() => null),
-        new Promise(resolveDelay => setTimeout(resolveDelay, 1500))
-      ]).finally(() => fail(reason));
-    };
+    const onAbort = () => fail(getAbortReason(input.signal));
     input.signal?.addEventListener('abort', onAbort, { once: true });
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', chunk => {
-      idleWatchdog.reset();
+      if (settled) return;
+      if (!stopping) idleWatchdog.reset();
       stdoutBuffer += chunk;
       const lines = stdoutBuffer.split(/\r?\n/);
       stdoutBuffer = lines.pop() || '';
@@ -876,6 +872,7 @@ function runCodexAppServerProcess(input) {
     child.stderr.on('data', chunk => {
       stderr += chunk;
     });
+    child.stdin.on?.('error', fail);
     child.on('error', fail);
     child.on('close', code => {
       if (settled) {
@@ -951,12 +948,14 @@ function runCodexAppServerProcess(input) {
     }
 
     function request(method, params) {
-      idleWatchdog.reset();
+      if (settled || (stopping && method !== 'turn/interrupt')) return Promise.reject(new Error('Codex turn is stopping or has ended.'));
+      if (!stopping) idleWatchdog.reset();
       const id = nextId++;
       const message = { id, method, params };
       child.stdin.write(`${JSON.stringify(message)}\n`);
       return new Promise((resolveRequest, rejectRequest) => {
         pending.set(id, {
+          method, params,
           resolve: resolveRequest,
           reject: rejectRequest
         });
@@ -972,10 +971,12 @@ function runCodexAppServerProcess(input) {
     }
 
     function handleMessage(line) {
+      if (settled) return;
       let message;
       try {
         message = JSON.parse(line);
       } catch {
+        if (stopping) return;
         emitCodexEvent(input.emit, 'codex.session.raw', 'Codex app-server emitted non-JSON output', {
           text: truncateText(line, 1000)
         });
@@ -992,23 +993,29 @@ function runCodexAppServerProcess(input) {
         if (message.error) {
           pendingRequest.reject(new Error(message.error.message || JSON.stringify(message.error)));
         } else {
+          if (pendingRequest.method === 'thread/start' || pendingRequest.method === 'thread/resume') {
+            activeThreadId = message.result?.thread?.id || message.result?.threadId || pendingRequest.params?.threadId || activeThreadId;
+          }
+          if (pendingRequest.method === 'turn/start') activeTurnId = message.result?.turn?.id || activeTurnId;
           pendingRequest.resolve(message.result);
         }
         return;
       }
 
       if (Object.prototype.hasOwnProperty.call(message, 'id') && message.method) {
+        if (stopping) { response(message.id, { decision: 'decline' }); return; }
         handleServerRequest(message);
         return;
       }
 
       if (message.method) {
+        if (stopping || !eventScope.accepts(message.params)) return;
         if (message.method === 'turn/started') {
-          activeThreadId = message.params?.thread?.id || message.params?.threadId || activeThreadId;
-          activeTurnId = message.params?.turn?.id || message.params?.turnId || activeTurnId;
+          const threadId = message.params?.thread?.id || message.params?.threadId;
+          if (!activeTurnId && threadId === activeThreadId) activeTurnId = message.params?.turn?.id || message.params?.turnId || '';
           publishActiveTurnControl();
         }
-        recordAssistantMessage(message);
+        if (activeTurnId) recordAssistantMessage(message);
         // For `error` events surface the actual error text as the visible
         // title so the run timeline reads "Reconnecting... 2/5" instead of
         // a generic "error". Other methods continue to use the method name.
@@ -1019,9 +1026,9 @@ function runCodexAppServerProcess(input) {
           method: message.method,
           params: message.params || {}
         }, inferNotificationStatus(message));
-        if (message.method === 'item/completed' &&
+        if (message.method === 'item/completed' && eventScope.owns(message.params) &&
           !readProgressController.observe(message.params?.item || {})) return;
-        if (message.method === 'turn/completed' && (!activeTurnId || message.params?.turn?.id === activeTurnId || message.params?.turnId === activeTurnId)) {
+        if (message.method === 'turn/completed' && activeTurnId && (message.params?.turn?.id === activeTurnId || message.params?.turnId === activeTurnId)) {
           succeed();
         }
         if (message.method === 'error' && isTransientCodexAppServerError(message.params)) {
@@ -1084,7 +1091,7 @@ function runCodexAppServerProcess(input) {
     }
 
     function publishActiveTurnControl() {
-      if (controlPublished || !activeThreadId || !activeTurnId) {
+      if (settled || stopping || controlPublished || !activeThreadId || !activeTurnId) {
         return;
       }
       controlPublished = true;
@@ -1100,6 +1107,7 @@ function runCodexAppServerProcess(input) {
         interrupt: () => interruptActiveTurn()
       });
       input.onControlReady?.(control);
+      if (settled || stopping) return;
       emitCodexEvent(input.emit, 'codex.turn.bound', 'Codex turn is ready for follow-up guidance', {
         threadId: activeThreadId,
         turnId: activeTurnId
@@ -1117,16 +1125,13 @@ function runCodexAppServerProcess(input) {
     }
 
     function succeed() {
-      if (settled) {
+      if (settled || stopping) {
         return;
       }
       settled = true;
       const turnEndedError = new Error('Codex turn ended before the pending app-server request completed.');
       turnEndedError.code = 'codex_turn_ended';
-      for (const pendingRequest of pending.values()) {
-        pendingRequest.reject(turnEndedError);
-      }
-      pending.clear();
+      rejectPendingRequests(pending, turnEndedError);
       cleanup();
       child.kill('SIGTERM');
       resolve({
@@ -1136,19 +1141,17 @@ function runCodexAppServerProcess(input) {
     }
 
     function fail(error) {
-      if (settled) {
-        return;
-      }
-      settled = true;
+      if (settled || stopping) return;
+      stopping = true;
       cleanup();
-      for (const pendingRequest of pending.values()) {
-        pendingRequest.reject(error);
-      }
-      pending.clear();
-      if (child.exitCode === null && !child.killed) {
-        child.kill('SIGTERM');
-      }
-      reject(error);
+      rejectPendingRequests(pending, error);
+      return stopCodexAppServer(child, {
+        interrupt: interruptActiveTurn, reason: error, processGroup: process.platform !== 'win32'
+      }).then(() => error, stopError => stopError).then(finalError => {
+        settled = true;
+        rejectPendingRequests(pending, finalError);
+        reject(finalError);
+      });
     }
 
     function cleanup() {

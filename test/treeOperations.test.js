@@ -346,6 +346,64 @@ test('cold native selection resolves nested paths without the legacy doc registr
   assert.equal(harness.ops.getActiveFilePath(), 'example/my  draft.tex');
 });
 
+for (const attribute of ['data-path', 'data-file-path', 'data-name', 'aria-label', 'title']) {
+  test(`file identity preserves icon-like names in ${attribute}`, () => {
+    for (const name of ['notes.tex', 'notebook.tex', 'article.tex', 'description.tex',
+      'draft.tex', 'folder.tex', 'insert_drive_file.tex', 'book_5_notes.tex', 'note paper.tex', 'my  draft.tex']) {
+      const file = makeDomNode({ role: 'treeitem', textContent: `description${name}more_vertMenu` });
+      file.attributes[attribute] = name;
+      const harness = createTreeOperationsHarness({ selectedPath: '', nodes: [file], docs: [] });
+      assert.equal(harness.ops.readProjectPathFromNode(file), name, `${attribute}: ${name}`);
+      assert.equal(harness.ops.projectPathExists(name), true, name);
+    }
+  });
+}
+
+test('file tree reads the filename element without treating its letters as icon text', () => {
+  const name = makeDomNode({ className: 'item-name', textContent: 'notes.tex' });
+  const file = makeDomNode({ role: 'treeitem', textContent: 'descriptionnotes.texmore_vertMenu', children: [name] });
+  file.querySelectorAll = selector => selector === '.item-name' ? [name] : [];
+  const harness = createTreeOperationsHarness({ selectedPath: '', nodes: [file], docs: [] });
+  assert.equal(harness.ops.readProjectPathFromNode(file), 'notes.tex');
+  assert.equal(harness.ops.findFileTreeNode('s.tex'), null, 'a truncated alias must not open notes.tex');
+  const textOnly = makeDomNode({ role: 'treeitem', textContent: 'notebook.tex' });
+  assert.equal(harness.ops.readProjectPathFromNode(textOnly), 'notebook.tex');
+});
+
+test('notes.tex beside an expanded subfolder opens by its exact full path', async () => {
+  const folder = makeDomNode({ role: 'treeitem', ariaLabel: 'col_qa_20260921_full', ariaExpanded: 'true' });
+  const sub = makeDomNode({ role: 'treeitem', ariaLabel: 'sub', ariaExpanded: 'true' });
+  const nested = makeDomNode({ role: 'treeitem', ariaLabel: 'nested.tex', textContent: 'descriptionnested.tex' });
+  const notes = makeDomNode({ role: 'treeitem', ariaLabel: 'notes.tex', textContent: 'descriptionnotes.tex' });
+  const rootNotes = makeDomNode({ role: 'treeitem', ariaLabel: 'notes.tex', textContent: 'descriptionnotes.tex' });
+  const nestedList = makeDomNode({ role: 'tree', className: 'file-tree-folder-list', children: [nested] });
+  const folderList = makeDomNode({ role: 'tree', className: 'file-tree-folder-list', children: [
+    makeDomNode({ className: 'file-tree-folder-list-inner', children: [sub, nestedList, notes] })
+  ] });
+  const root = makeDomNode({ role: 'tree', className: 'file-tree-list', children: [folder, folderList, rootNotes] });
+  const nodes = [];
+  function collect(node) { nodes.push(node); for (const child of node.children) collect(child); }
+  collect(root);
+  notes.openPath = 'col_qa_20260921_full/notes.tex';
+  rootNotes.openPath = 'notes.tex';
+  notes.attributes['data-file-id'] = '111111111111111111111111';
+  nested.attributes['data-file-id'] = '222222222222222222222222';
+  const harness = createTreeOperationsHarness({ selectedPath: 'notes.tex', nodes, docs: [] });
+  assert.equal(harness.ops.readProjectPathFromNode(notes), notes.openPath);
+  assert.equal(harness.ops.readProjectPathFromNode(nested), 'col_qa_20260921_full/sub/nested.tex');
+  assert.equal(harness.ops.projectPathExists(notes.openPath), true);
+  assert.equal(harness.ops.findFileTreeNode(notes.openPath), notes);
+  assert.equal(harness.ops.findFileTreeNode('col_qa_20260921_full/s.tex'), null);
+  assert.equal(harness.ops.findFileTreeNode('col_qa_20260921_full/sub/notes.tex'), null);
+  assert.ok(harness.ops.collectDocRecords().some(record => record.path === notes.openPath && record.id === '111111111111111111111111'));
+  const opened = await harness.ops.openFileByPath(notes.openPath);
+  assert.equal(opened.ok, true, opened.reason);
+  assert.equal(harness.getSelectedPath(), notes.openPath);
+  assert.equal(rootNotes.clickCount, 0, 'the same-named root file must stay untouched');
+  assert.ok(notes.clickCount > 0);
+  assert.equal(harness.ops.getActiveFilePath(), notes.openPath);
+});
+
 function createTreeOperationsHarness({
   selectedPath,
   nodes,

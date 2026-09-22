@@ -137,15 +137,19 @@
     }
     const requestId = ++storageUsageRequestId;
     const projectId = getCurrentProjectId?.();
+    const settingsScope = getPanel?.()?.dataset?.settingsScope;
     const isCurrent = () => requestId === storageUsageRequestId && projectId === getCurrentProjectId?.()
+      && settingsScope === getPanel?.()?.dataset?.settingsScope
       && getSettingsPanelInstance()?.container?.querySelector('[data-storage-usage]') === node;
     const current = getState();
     const sessionCount = Array.isArray(current?.sessions) ? current.sessions.length : 0;
     const runCount = Array.isArray(current?.runs) ? current.runs.length : 0;
-    const counts = tx(
-      `${sessionCount} loaded session(s) in this project · ${runCount} run(s) in the active session`,
-      `当前项目已加载 ${sessionCount} 个会话 · 当前会话 ${runCount} 轮运行`
-    );
+    const counts = settingsScope === 'account'
+      ? tx('All projects in this browser', '当前浏览器中的所有项目')
+      : tx(
+        `${sessionCount} loaded session(s) in this project · ${runCount} run(s) in the active session`,
+        `当前项目已加载 ${sessionCount} 个会话 · 当前会话 ${runCount} 轮运行`
+      );
     // Dynamic text belongs to this renderer, not the loading-label translator.
     node.removeAttribute?.('data-i18n');
     node.textContent = counts;
