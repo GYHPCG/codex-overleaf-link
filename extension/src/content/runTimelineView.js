@@ -960,12 +960,12 @@
   // same executable state as `pending`.
   function configureLifecycleUndoButton(button, run) {
     const status = run.trackedChangeStatus || '';
+    const inFlight = trackedChangeInFlight.get(run.id);
     const projection = projectRunSettlement(run);
     // §7 settlement matrix: needs_review keeps BOTH controls visible AND
     // actionable. Branch placed before the terminal branches so a
     // needs_review run is never treated as terminal.
     if (status === 'needs_review') {
-      const inFlight = trackedChangeInFlight.get(run.id);
       button.hidden = false;
       button.disabled = !projection.canUndo || inFlight === 'reject' || inFlight === 'accept';
       button.textContent = tr('undoRun');
@@ -976,14 +976,14 @@
       });
       return;
     }
-    if (status === 'rejected') {
+    if (status === 'rejected' && !inFlight) {
       button.hidden = false;
       button.disabled = true;
       button.textContent = tr('undoApplied');
       button.title = tr('undoAppliedTitle');
       return;
     }
-    if (status === 'accepted') {
+    if (status === 'accepted' && !inFlight) {
       // The run was accepted — terminal. Undo stays visible but greyed so the
       // card shows both controls disabled, never removed.
       button.hidden = false;
@@ -992,11 +992,10 @@
       button.title = tr('undoRunTitle');
       return;
     }
-    if (status !== 'pending') {
+    if (status !== 'pending' && !inFlight) {
       button.hidden = true;
       return;
     }
-    const inFlight = trackedChangeInFlight.get(run.id);
     button.hidden = false;
     button.disabled = !projection.canUndo || inFlight === 'reject' || inFlight === 'accept';
     button.textContent = tr('undoRun');
@@ -1034,12 +1033,12 @@
     }
 
     const status = run.trackedChangeStatus || '';
+    const inFlight = trackedChangeInFlight.get(run.id);
     const projection = projectRunSettlement(run);
     // §7 settlement matrix: needs_review keeps BOTH controls visible AND
     // actionable. It remains an internal retryable proof state, while the
     // primary button label stays in the same executable state as `pending`.
     if (status === 'needs_review') {
-      const inFlight = trackedChangeInFlight.get(run.id);
       button.hidden = false;
       button.disabled = !projection.canAccept || inFlight === 'accept' || inFlight === 'reject';
       if (inFlight === 'accept') {
@@ -1052,14 +1051,14 @@
       wireAcceptInlineConfirm(button, run.id);
       return;
     }
-    if (status === 'accepted') {
+    if (status === 'accepted' && !inFlight) {
       button.hidden = false;
       button.disabled = true;
       button.textContent = tr('runAcceptTrackedDone');
       button.title = tr('runAcceptTrackedDoneTitle');
       return;
     }
-    if (status === 'rejected') {
+    if (status === 'rejected' && !inFlight) {
       // The run was rejected — terminal. Accept All stays visible but greyed so
       // the card shows both controls disabled, never removed.
       button.hidden = false;
@@ -1068,12 +1067,11 @@
       button.title = tr('runAcceptTrackedTitle');
       return;
     }
-    if (status !== 'pending') {
+    if (status !== 'pending' && !inFlight) {
       button.hidden = true;
       return;
     }
 
-    const inFlight = trackedChangeInFlight.get(run.id);
     button.hidden = false;
     button.disabled = !projection.canAccept || inFlight === 'accept' || inFlight === 'reject';
     if (inFlight === 'accept') {

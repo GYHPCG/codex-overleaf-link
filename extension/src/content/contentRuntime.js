@@ -6947,11 +6947,9 @@
       detail: { [tr('detailWillUndo')]: trackedUndo ? formatTrackedChangeFiles(run.undoTrackedChanges) : formatTrackedUndoFiles(run) }
     });
 
-    let result;
-    let trackedUndoPostFilesAtDispatch;
     try {
-      trackedUndoPostFilesAtDispatch = buildTrackedUndoPostFiles(run);
-      result = await callPageBridge('rejectTrackedChanges', {
+      const trackedUndoPostFilesAtDispatch = buildTrackedUndoPostFiles(run);
+      const result = await callPageBridge('rejectTrackedChanges', {
         trackedChanges: run.undoTrackedChanges || [],
         expectedFiles: run.undoExpectedFiles || [],
         postFiles: trackedUndoPostFilesAtDispatch,
@@ -6964,38 +6962,39 @@
         // `aborted_project_changed` and the document is left untouched.
         runProjectId: getRunProjectIdForWriteback(run)
       });
+      writebackOrchestrator.invalidateMirrorAfterUndo(runId, getRunProjectIdForWriteback(run), result);
+      appendRunRecordEvent(runId, {
+        title: trackedUndo
+          ? tr('undoTrackedResult', { applied: result.applied?.length || 0, skipped: result.skipped?.length || 0 })
+          : tr('undoNativeResult', { applied: result.applied?.length || 0, skipped: result.skipped?.length || 0 }),
+        status: result.skipped?.length ? 'failed' : 'completed',
+        detail: {
+          [trackedUndo ? tr('detailRejected') : tr('detailUndone')]: (result.applied || []).map(item => ({
+            [tr('detailFile')]: item.trackedChange?.path || tr('unknownFile'),
+            [tr('detailRecord')]: item.trackedChange?.label || item.trackedChange?.id || item.trackedChange?.key
+          })),
+          [tr('detailSkipped')]: (result.skipped || []).map(item => ({
+            [tr('detailFile')]: item.trackedChange?.path || tr('unknownFile'),
+            [tr('detailRecord')]: item.trackedChange?.label || item.trackedChange?.id || item.trackedChange?.key || '',
+            [tr('detailReason')]: formatBridgeResultReason(item.result, item.trackedChange?.path)
+          }))
+        }
+      });
+      if (lifecycleReject) {
+        WritebackSettlement.attachUndoNotVerifiedFailure(run, result, {
+          buildFailure: buildContentFailure,
+          postFiles: trackedUndoPostFilesAtDispatch
+        });
+        await applyTrackedChangeSettlement(runId, 'reject', result);
+        return;
+      }
+      applyLegacyUndoSettlement(runId, result.skipped?.length ? 'partial' : 'applied', result);
     } finally {
       if (lifecycleReject) {
         trackedChangeInFlight.delete(runId);
+        refreshRunCardControls(runId);
       }
     }
-    writebackOrchestrator.invalidateMirrorAfterUndo(runId, getRunProjectIdForWriteback(run), result);
-    appendRunRecordEvent(runId, {
-      title: trackedUndo
-        ? tr('undoTrackedResult', { applied: result.applied?.length || 0, skipped: result.skipped?.length || 0 })
-        : tr('undoNativeResult', { applied: result.applied?.length || 0, skipped: result.skipped?.length || 0 }),
-      status: result.skipped?.length ? 'failed' : 'completed',
-      detail: {
-        [trackedUndo ? tr('detailRejected') : tr('detailUndone')]: (result.applied || []).map(item => ({
-          [tr('detailFile')]: item.trackedChange?.path || tr('unknownFile'),
-          [tr('detailRecord')]: item.trackedChange?.label || item.trackedChange?.id || item.trackedChange?.key
-        })),
-        [tr('detailSkipped')]: (result.skipped || []).map(item => ({
-          [tr('detailFile')]: item.trackedChange?.path || tr('unknownFile'),
-          [tr('detailRecord')]: item.trackedChange?.label || item.trackedChange?.id || item.trackedChange?.key || '',
-          [tr('detailReason')]: formatBridgeResultReason(item.result, item.trackedChange?.path)
-        }))
-      }
-    });
-    if (lifecycleReject) {
-      WritebackSettlement.attachUndoNotVerifiedFailure(run, result, {
-        buildFailure: buildContentFailure,
-        postFiles: trackedUndoPostFilesAtDispatch
-      });
-      applyTrackedChangeSettlement(runId, 'reject', result);
-      return;
-    }
-    applyLegacyUndoSettlement(runId, result.skipped?.length ? 'partial' : 'applied', result);
   }
 
   async function acceptRun(runId) {
@@ -7025,50 +7024,50 @@
       detail: { [tr('detailAccepted')]: formatTrackedChangeFiles(run.undoTrackedChanges) }
     });
 
-    let result;
     try {
-      result = await callPageBridge('acceptTrackedChanges', {
+      const result = await callPageBridge('acceptTrackedChanges', {
         trackedChanges: run.undoTrackedChanges || [],
         expectedFiles: run.undoExpectedFiles || [],
         postFiles: buildTrackedUndoPostFiles(run),
         appliedOperations: Array.isArray(run.appliedOperations) ? run.appliedOperations : [],
         runProjectId: getRunProjectIdForWriteback(run)
       });
-    } finally {
-      trackedChangeInFlight.delete(runId);
-    }
-    appendAcceptDiagnosticEvents(runId, Array.isArray(result.diagnostics) ? result.diagnostics : []);
-    appendRunRecordEvent(runId, {
-      title: tr('runAcceptTrackedResult', { applied: result.applied?.length || 0, skipped: result.skipped?.length || 0 }),
-      status: result.skipped?.length ? 'failed' : 'completed',
-      detail: {
-        [tr('detailAccepted')]: (result.applied || []).map(item => ({
-          [tr('detailFile')]: item.trackedChange?.path || tr('unknownFile'),
-          [tr('detailRecord')]: item.trackedChange?.label || item.trackedChange?.id || item.trackedChange?.key
-        })),
-        [tr('detailSkipped')]: (result.skipped || []).map(item => ({
-          [tr('detailFile')]: item.trackedChange?.path || tr('unknownFile'),
-          [tr('detailRecord')]: item.trackedChange?.label || item.trackedChange?.id || item.trackedChange?.key || '',
-          [tr('detailReason')]: formatBridgeResultReason(item.result, item.trackedChange?.path)
-        }))
-      }
-    });
-    if (result.ok === false) {
+      appendAcceptDiagnosticEvents(runId, Array.isArray(result.diagnostics) ? result.diagnostics : []);
       appendRunRecordEvent(runId, {
-        title: tr('runAcceptTrackedFailed'),
-        status: 'failed',
+        title: tr('runAcceptTrackedResult', { applied: result.applied?.length || 0, skipped: result.skipped?.length || 0 }),
+        status: result.skipped?.length ? 'failed' : 'completed',
         detail: {
-          [tr('detailReason')]: tr('runAcceptTrackedFailedReason')
+          [tr('detailAccepted')]: (result.applied || []).map(item => ({
+            [tr('detailFile')]: item.trackedChange?.path || tr('unknownFile'),
+            [tr('detailRecord')]: item.trackedChange?.label || item.trackedChange?.id || item.trackedChange?.key
+          })),
+          [tr('detailSkipped')]: (result.skipped || []).map(item => ({
+            [tr('detailFile')]: item.trackedChange?.path || tr('unknownFile'),
+            [tr('detailRecord')]: item.trackedChange?.label || item.trackedChange?.id || item.trackedChange?.key || '',
+            [tr('detailReason')]: formatBridgeResultReason(item.result, item.trackedChange?.path)
+          }))
         }
       });
-      if (!WritebackSettlement.isSuccessfulTrackedChangeSettlement(result)) {
-        refreshRunCardControls(runId);
+      if (result.ok === false) {
+        appendRunRecordEvent(runId, {
+          title: tr('runAcceptTrackedFailed'),
+          status: 'failed',
+          detail: {
+            [tr('detailReason')]: tr('runAcceptTrackedFailedReason')
+          }
+        });
+        if (!WritebackSettlement.isSuccessfulTrackedChangeSettlement(result)) {
+          refreshRunCardControls(runId);
+        }
       }
+      WritebackSettlement.attachAcceptNotVerifiedFailure(run, result, {
+        buildFailure: buildContentFailure
+      });
+      await applyTrackedChangeSettlement(runId, 'accept', result);
+    } finally {
+      trackedChangeInFlight.delete(runId);
+      refreshRunCardControls(runId);
     }
-    WritebackSettlement.attachAcceptNotVerifiedFailure(run, result, {
-      buildFailure: buildContentFailure
-    });
-    applyTrackedChangeSettlement(runId, 'accept', result);
   }
 
   function getRunProjectIdForWriteback(run) {
@@ -7112,7 +7111,7 @@
     );
   }
 
-  function applyTrackedChangeSettlement(runId, kind, result) {
+  async function applyTrackedChangeSettlement(runId, kind, result) {
     const run = findRunRecord(runId);
     const settlement = WritebackSettlement.settleTrackedChangeLifecycle({
       kind,
@@ -7121,12 +7120,10 @@
       failureReasons: FailureReasons
     });
     if (settlement.decision === 'blocked') {
-      refreshRunCardControls(runId);
       return;
     }
     Object.assign(run, WritebackSettlement.applySettlementTransition(run, settlement));
-    saveStateSoon();
-    refreshRunCardControls(runId);
+    await flushQueuedSaveState({ preserveRunActionPayload: true });
   }
 
   function getRunUndoCount(run) {
