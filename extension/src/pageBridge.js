@@ -93,6 +93,9 @@
     window
   });
   writebackRouter = requirePageModule('CodexOverleafWritebackRouter').create({
+    confirmReviewWriteback: (params, result) => requirePageModule('CodexOverleafSaveState').confirmReviewWriteback({
+      params, result, getProjectId, delay, readSnapshot: options => snapshotRouter.fetchProjectZipSnapshot(options)
+    }),
     createTextFile: textFileCreator.createFile,
     deleteTextFile: textFileCreator.deleteFile,
     activeEditorIdentityChanged,

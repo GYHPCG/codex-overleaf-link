@@ -95,6 +95,7 @@
   }
   return Object.freeze({
     createController: createController,
-    persistPanelState: PanelState?.persistPanelState || null
+    persistPanelState: PanelState?.persistPanelState || null,
+    applyReviewTransition: PanelState?.applyReviewTransition || null
   });
 });

@@ -159,6 +159,49 @@
     return out;
   }
 
+  // Review terminal states are monotonic even when a later session snapshot is stale.
+  function mergeSessionReviewState(incoming, existing, reviewRunIds) {
+    if (!existing || incoming.id !== existing.id || incoming.projectId !== existing.projectId
+      || !incoming.accountScopeId || incoming.accountScopeId !== existing.accountScopeId) return incoming;
+    var terminal = run => ['accepted', 'rejected'].includes(run?.trackedChangeStatus);
+    var incomingRuns = new Map((incoming.runs || []).map(run => [run.id, run]));
+    var existingRuns = new Map((existing.runs || []).map(run => [run.id, run]));
+    var requestedIds = new Set(reviewRunIds || []);
+    var explicitReview = Array.from(requestedIds).some(id =>
+      ['accepted', 'rejected', 'needs_review'].includes(incomingRuns.get(id)?.trackedChangeStatus));
+    var newer = (Date.parse(incoming.updatedAt) || 0) >= (Date.parse(existing.updatedAt) || 0);
+    if (!newer && !explicitReview) return incoming;
+    var base = newer ? incoming : existing;
+    var fields = ['trackedChangeStatus', 'undoStatus', 'undoTrackedChanges', 'undoExpectedFiles',
+      'undoOperations', 'undoBaseFiles', 'appliedOperations', 'trackedChangeCaptures', 'settlement', 'settlementFacts'];
+    var changed = false;
+    var runs = (base.runs || []).map(function (run) {
+      var previous = existingRuns.get(run.id), candidate = incomingRuns.get(run.id);
+      // Never revive a removed run or change the first durably recorded review decision.
+      var source = terminal(previous) ? previous
+        : explicitReview && requestedIds.has(run.id) ? candidate : null;
+      if (!source || source === run) return run;
+      if (source.runProjectId && source.runProjectId !== incoming.projectId) return run;
+      var merged = { ...run };
+      for (var field of fields) {
+        if (Object.prototype.hasOwnProperty.call(source, field)) {
+          merged[field] = JSON.parse(JSON.stringify(source[field]));
+        } else {
+          delete merged[field];
+        }
+      }
+      changed = true;
+      return merged;
+    });
+    if (!changed) return base;
+    var merged = { ...base, runs };
+    if (explicitReview && !newer) {
+      merged.updatedAt = new Date(Math.max(Date.now(), Date.parse(existing.updatedAt) || 0,
+        Date.parse(incoming.updatedAt) || 0) + 1).toISOString();
+    }
+    return merged;
+  }
+
   function hashString(value) {
     var hash = 2166136261;
     var text = String(value || '');
@@ -171,6 +214,7 @@
 
   return {
     compactStructuredEventValue: compactStructuredEventValue,
+    mergeSessionReviewState: mergeSessionReviewState,
     compactRunsForStorage: compactRunsForStorage,
     compactRunActionPayload: compactRunActionPayload,
     compactProviderSnapshot: compactProviderSnapshot,

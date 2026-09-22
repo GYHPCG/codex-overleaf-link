@@ -5666,7 +5666,7 @@
       const urlProjectId = getCurrentProjectId();
       const projectId = projectIdOverride || urlProjectId;
       if (!projectId) {
-        return;
+        if (options?.reviewRunIds?.length) throw new Error('Review persistence lost its project.'); return;
       }
       // Read currentRunView through a defensive accessor so historical test
       // harnesses that inline `saveState` without re-declaring the module-
@@ -5678,7 +5678,7 @@
           'Skipped saveState: run is in flight on a different project than the current URL; settlement owns persistence.',
           '已跳过 saveState：本次运行所属项目与当前 URL 不一致，写回由 settlement 负责。'
         ));
-        return;
+        if (options?.reviewRunIds?.length) throw new Error('Review persistence project changed.'); return;
       }
       const compactState = prepareStateForStorage(state, { onAggressive: notifyAggressiveCompactionOnce });
       compactState.autoRecompile = state.autoRecompile;
@@ -5699,7 +5699,7 @@
         state: stateSnapshot,
         compactState: compactStateSnapshot,
         projectId,
-        deletedSessionIds: options?.deletedSessionIds,
+        deletedSessionIds: options?.deletedSessionIds, reviewRunIds: options?.reviewRunIds,
         Migration,
         StorageDb,
         SessionPersistence: Modules.SessionPersistence,
@@ -5727,7 +5727,7 @@
           persistScopedState
         );
         if (!committed.ok && (
-          options?.queueMutation
+          options?.reviewRunIds?.length || options?.queueMutation
           || options?.queueMutations?.length
           || committed.reason !== 'stale_view'
         )) {
@@ -5739,12 +5739,12 @@
     } catch (error) {
       if (
         error?.code === 'account_scope_unavailable' &&
-        !options?.queueMutation &&
+        !options?.reviewRunIds?.length && !options?.queueMutation &&
         !(Array.isArray(options?.queueMutations) && options.queueMutations.length)
       ) {
         return;
       }
-      if (options?.queueMutation || options?.queueMutations?.length) {
+      if (options?.reviewRunIds?.length || options?.queueMutation || options?.queueMutations?.length) {
         throw error;
       }
       let fallbackError = null;
@@ -5869,6 +5869,7 @@
           // here (e.g. fallback chrome.storage.local.set rethrew).
           emitStorageQuotaFailure(error, null);
         }
+        if (persistenceOptions?.reviewRunIds?.length) throw error;
         appendPlainLog(tx(`Failed to save session state: ${formatStateSaveError(error)}`, `保存会话状态失败：${formatStateSaveError(error)}`));
       })
       .finally(() => {
@@ -5923,6 +5924,7 @@
       ...(current || {}),
       ...incoming,
       queueMutation: undefined,
+      reviewRunIds: Array.from(new Set([...(current?.reviewRunIds || []), ...(incoming?.reviewRunIds || [])])),
       queueMutations,
       deletedSessionIds: Array.from(new Set([
         ...(current?.deletedSessionIds || []),
@@ -7122,8 +7124,10 @@
     if (settlement.decision === 'blocked') {
       return;
     }
-    Object.assign(run, WritebackSettlement.applySettlementTransition(run, settlement));
-    await flushQueuedSaveState({ preserveRunActionPayload: true });
+    await Modules.ScopedPersistenceCoordinator.applyReviewTransition({
+      getState: () => state, runId, transition: WritebackSettlement.applySettlementTransition(run, settlement),
+      persist: flushQueuedSaveState
+    });
   }
 
   function getRunUndoCount(run) {

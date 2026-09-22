@@ -1343,6 +1343,7 @@
     clearStore: clearStore,
     clearAllStores: clearAllStores,
     buildSessionRecord: buildSessionRecord,
+    mergeSessionReviewState: StorageRunActions.mergeSessionReviewState,
     buildTurnRecord: buildTurnRecord,
     buildEventRecord: buildEventRecord,
     buildArtifactRecord: buildArtifactRecord,

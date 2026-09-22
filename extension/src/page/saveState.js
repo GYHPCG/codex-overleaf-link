@@ -288,5 +288,48 @@
     };
   }
 
-  root.CodexOverleafSaveState = { create };
+  async function confirmReviewWriteback({ params, result, readSnapshot, getProjectId, delay,
+    now = Date.now, timeoutMs = 45000 }) {
+    if (result?.ok !== true || result.skipped?.length) return result;
+    const expected = new Map((params.expectedFiles || [])
+      .filter(file => file?.path && typeof file.content === 'string').map(file => [file.path, file.content]));
+    for (const entry of result.applied || []) {
+      const path = entry.trackedChange?.path || entry.operation?.path;
+      if (expected.has(path) && typeof entry.result?.verifiedContent === 'string') {
+        expected.set(path, entry.result.verifiedContent);
+      }
+    }
+    const deadline = now() + Math.max(0, timeoutMs);
+    let attempts = 0;
+    if (expected.size && typeof readSnapshot === 'function') {
+      do {
+        if (!params.runProjectId || getProjectId() !== params.runProjectId) break;
+        try {
+          const snapshot = await readSnapshot({ force: true, maxAgeMs: 0,
+            zipTimeoutMs: Math.max(1, Math.min(8000, deadline - now())) });
+          attempts++;
+          if (getProjectId() !== params.runProjectId) break;
+          if (snapshot?.ok === true && Array.from(expected).every(([path, content]) =>
+            snapshot.files?.some(file => file.path === path && file.source === 'overleaf-zip'
+              && file.content === content))) {
+            return { ...result, saveVerification: { ok: true, state: 'verified_saved',
+              source: 'overleaf-zip', attempts } };
+          }
+        } catch (_error) { /* A transient download failure grants no save proof. */ }
+        if (now() >= deadline) break;
+        await delay(Math.min(300, deadline - now()));
+      } while (now() < deadline);
+    }
+    const reason = 'Undo changed the editor, but its saved server content could not be confirmed. Keep this page open and check Overleaf before retrying.';
+    return { ...result, ok: false, saveVerification: { ok: false, state: 'unknown_timeout', attempts },
+      skipped: [...(result.skipped || []), { trackedChange: { path: expected.keys().next().value || '' },
+        result: { ok: false, code: 'undo_not_verified', reason, failure: {
+          code: 'undo_not_verified', stage: 'verification', severity: 'needs_review',
+          terminalState: 'needs_review', changedDocument: true, retryable: true, userMessage: reason
+        } } }] };
+  }
+
+  const api = { create, confirmReviewWriteback };
+  root.CodexOverleafSaveState = api;
+  if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

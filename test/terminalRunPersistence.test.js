@@ -142,7 +142,8 @@ function createReviewPersistenceHarness(options = {}) {
   // Start at the live post-write boundary; reload the durable result through the real codecs below.
   const session = { id: 'review-session', title: 'QA', runs: [run] };
   const state = { activeSessionId: session.id, sessions: [session], runs: session.runs };
-  return new Function('state', 'WritebackSettlement', 'StorageDb', 'FailureReasons', 'options', `
+  return new Function('state', 'WritebackSettlement', 'StorageDb', 'FailureReasons', 'options', 'PanelState', `
+    const Modules = { ScopedPersistenceCoordinator: PanelState };
     const record = state.runs[0];
     const trackedChangeInFlight = new Map(), timers = new Map(), pendingSaves = [], saved = [], calls = [];
     let saveStateTimer = null, saveStateInFlight = false, saveStateRunAfterFlight = false;
@@ -150,6 +151,7 @@ function createReviewPersistenceHarness(options = {}) {
     const setTimeout = callback => { const id = ++timerId; timers.set(id, callback); return id; };
     const clearTimeout = id => timers.delete(id);
     async function saveState() {
+      if (options.saveError) throw new Error('durable storage failed');
       const snapshot = StorageDb.buildSessionRecord(JSON.parse(JSON.stringify({
         ...state.sessions[0], projectId: 'project-a', accountScopeId: 'account-a'
       })), { preserveRunActionPayload: true });
@@ -204,7 +206,8 @@ function createReviewPersistenceHarness(options = {}) {
     return { record, trackedChangeInFlight, pendingSaves, saved, calls,
       beginOlderSave: runQueuedSaveState, render() { refreshRunCardControls(); return rendered; },
       start: kind => kind === 'accept' ? acceptRun(record.id) : undoRunTrackedChanges(record.id, record) };
-`)(state, ReviewSettlement, ReviewStorageDb, ReviewFailureReasons, options);
+`)(state, ReviewSettlement, ReviewStorageDb, ReviewFailureReasons, options,
+    require('../extension/src/content/scopedPersistencePanelState'));
 }
 
 for (const kind of ['accept', 'reject']) {
@@ -270,6 +273,18 @@ test('native review failure releases the UI lock without persisting a false term
     assert.equal(h.trackedChangeInFlight.size, 0);
     assert.equal(h.record.trackedChangeStatus, 'pending');
     assert.equal(h.saved.length, 0);
+  }
+});
+
+test('a failed review save remains uncertain and never exposes a false terminal', async () => {
+  for (const kind of ['accept', 'reject']) {
+    const h = createReviewPersistenceHarness({ saveError: true });
+    await assert.rejects(h.start(kind), /durable storage failed/);
+    assert.equal(h.record.trackedChangeStatus, 'needs_review');
+    assert.equal(h.record.undoTrackedChanges.length, 1);
+    assert.equal(h.trackedChangeInFlight.size, 0);
+    assert.equal(h.saved.length, 0);
+    assert.equal(h.calls.length, 1);
   }
 });
 

@@ -1630,7 +1630,10 @@
   }
     return {
       acceptTrackedChanges,
-      rejectTrackedChanges,
+      rejectTrackedChanges: async params => {
+        const result = await rejectTrackedChanges(params);
+        return deps.confirmReviewWriteback ? deps.confirmReviewWriteback(params, result) : result;
+      },
       collectTrackedChangeRefsForPaths,
       prepareTrackedChangeCapture, getTrackedChangeCaptureStatus,
       captureTrackedWrite,

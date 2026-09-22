@@ -15,6 +15,42 @@
     return JSON.parse(JSON.stringify(value));
   }
 
+  async function applyReviewTransition({ getState, runId, transition, persist }) {
+    const targets = () => Array.from(new Set([
+      ...(getState().runs || []),
+      ...(getState().sessions || []).flatMap(session => session.runs || [])
+    ])).filter(run => run.id === runId);
+    const records = targets();
+    const sessions = (getState().sessions || []).filter(session =>
+      (session.runs || []).some(run => run.id === runId));
+    if (!records.length || !sessions.length) throw reviewPersistenceError();
+    const previous = cloneSnapshot(records[0]);
+    for (const record of records) Object.assign(record, cloneSnapshot(transition));
+    for (const session of sessions) {
+      session.updatedAt = new Date(Math.max(Date.now(), (Date.parse(session.updatedAt) || 0) + 1,
+        (Date.parse(session.lastActivityAt) || 0) + 1)).toISOString();
+      session.lastActivityAt = session.updatedAt;
+    }
+    try {
+      await persist({ preserveRunActionPayload: true, reviewRunIds: [runId] });
+    } catch (error) {
+      // The remote action may have succeeded. Keep its recovery data and expose uncertainty.
+      for (const record of targets()) {
+        Object.assign(record, cloneSnapshot(previous), { trackedChangeStatus: 'needs_review' });
+        for (const field of ['settlement', 'settlementFacts']) {
+          if (!Object.prototype.hasOwnProperty.call(previous, field)) delete record[field];
+        }
+      }
+      throw error;
+    }
+  }
+
+  function reviewPersistenceError() {
+    return Object.assign(new Error('The review outcome was not durably saved. Check Overleaf before retrying.'), {
+      code: 'review_state_not_persisted'
+    });
+  }
+
   async function persistPanelState(input) {
     var state = cloneSnapshot(input.state || {});
     var compactState = cloneSnapshot(input.compactState || {});
@@ -35,6 +71,9 @@
         code: 'stale_view'
       });
     }
+    var reviewRuns = (input.reviewRunIds || []).map(id =>
+      (state.sessions || []).flatMap(session => session.runs || []).find(run => run.id === id));
+    if (reviewRuns.some(run => !run)) throw reviewPersistenceError();
     var latestPrefs = typeof Migration.loadPrefs === 'function'
       ? await Migration.loadPrefs(accountScopeId, projectId)
       : {};
@@ -94,18 +133,22 @@
           .filter(function (item) { return !queueTombstones[item?.id]; })
       }), { preserveRunActionPayload: true });
     });
-    await input.SessionPersistence.writeSessions({
+    var written = await input.SessionPersistence.writeSessions({
       Migration: Migration,
       StorageDb: StorageDb,
       projectId: projectId,
       accountScopeId: accountScopeId,
       deletedSessionIds: deletedSessionIds,
       sessionRecords: sessionRecords,
+      reviewRunIds: input.reviewRunIds,
       queueClaims: persistenceMeta.queueClaims || {},
       queueTombstones: queueTombstones,
       writerId: input.persistenceContext?.writerId || ''
     });
+    if (!reviewRuns.every(reviewRun => (written || []).some(session => (session.runs || []).some(run =>
+      run.id === reviewRun.id && run.trackedChangeStatus === reviewRun.trackedChangeStatus
+    )))) throw reviewPersistenceError();
   }
 
-  return Object.freeze({ persistPanelState: persistPanelState });
+  return Object.freeze({ persistPanelState: persistPanelState, applyReviewTransition: applyReviewTransition });
 });

@@ -5018,7 +5018,7 @@ test('Fix A: finishRunView durably flushes the happy path and skips the divergen
   assert.equal(sandbox.result.divergent, 0, 'navigation-divergent: settlement owns persistence');
 });
 
-test('Fix A: saveState honors options.projectIdOverride instead of getCurrentProjectId()', () => {
+test('Fix A: saveState honors options.projectIdOverride instead of getCurrentProjectId()', async () => {
   const src = getContentScriptSource();
   const body = extractFunction(src, 'saveState');
   // Defense-in-depth surface: a `projectIdOverride` option is accepted and,
@@ -5028,7 +5028,21 @@ test('Fix A: saveState honors options.projectIdOverride instead of getCurrentPro
   assert.match(body, /projectIdOverride/);
   assert.match(body, /options\s*&&\s*typeof\s+options\.projectIdOverride\s*===\s*['"]string['"]/);
   assert.match(body, /projectIdOverride\s*\|\|\s*urlProjectId/);
-  assert.match(body, /if\s*\(!projectId\)\s*\{\s*return;\s*\}/);
+  const makeSave = (projectId, runProjectId) => new Function(
+    'Modules', 'getCurrentProjectId', 'readLiveRunViewForSaveStateGuard', 'appendPlainLog', 'tx',
+    'return (' + body + ');'
+  )(
+    { StorageDb: {}, StorageMigration: {} }, () => projectId,
+    () => runProjectId ? { runProjectId } : null, () => {}, value => value
+  );
+  // Ordinary debounced saves may skip a missing/stale project; a review save
+  // must reject so Accepted/Undone cannot be shown without a durable receipt.
+  const noProject = makeSave('', '');
+  await noProject({});
+  await assert.rejects(noProject({ reviewRunIds: ['review-run'] }), /lost its project/);
+  const navigated = makeSave('project-b', 'project-a');
+  await navigated({});
+  await assert.rejects(navigated({ reviewRunIds: ['review-run'] }), /project changed/);
   // The navigation-divergent skip path must log and return early. The
   // accessor reads the live currentRunView through a defensive helper
   // (readLiveRunViewForSaveStateGuard) so test harnesses that inline

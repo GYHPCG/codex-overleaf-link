@@ -73,7 +73,10 @@
     const existingById = new Map(existingSessions
       .filter(record => !deleted.has(record.id))
       .map(record => [record.id, record]));
-    const writable = sessionRecords.filter(record => {
+    const mergedRecords = sessionRecords.map(record => StorageDb.mergeSessionReviewState?.(
+      record, existingById.get(record.id), options.reviewRunIds
+    ) || record);
+    const writable = mergedRecords.filter(record => {
       const existing = existingById.get(record.id);
       if (!existing) return true;
       return (Date.parse(record.updatedAt || '') || 0) >= (Date.parse(existing.updatedAt || '') || 0);

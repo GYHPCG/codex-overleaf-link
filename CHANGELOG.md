@@ -14,7 +14,7 @@
 - Count post-steer repetition only after steering is acknowledged, and reset read-progress pressure when real edits occur.
 - Reject late approvals and results while stopping a run, wait for local process-group shutdown, and explicitly report an unconfirmed stop instead of silently assuming termination.
 - Preserve literal file names such as `notes.tex`, `notebook.tex`, and `article.tex` when resolving the Overleaf file tree; read file labels separately from icon text.
-- Persist tracked-change Accept and Reject outcomes before exposing terminal controls, including when an older save is still in flight; keep native review decisions and write algorithms unchanged.
+- Persist tracked-change Accept and Reject outcomes before exposing terminal controls; preserve terminal review decisions against stale session snapshots and surface failed saves. Confirm Undo against fresh server ZIP contents before reporting completion; keep native review decisions and write algorithms unchanged.
 - Ignore delayed storage estimates after the settings scope changes.
 
 ### Compatibility

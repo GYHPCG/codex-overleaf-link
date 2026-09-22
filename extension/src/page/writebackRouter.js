@@ -1890,7 +1890,7 @@
       captureTrackedWrite, reconcileTrackedChangeCapture,
       waitForTrackedChangeDiff
     } = trackedChangesLifecycleModule.create({
-      window,
+      window, confirmReviewWriteback: deps.confirmReviewWriteback,
       checkWritebackRunProjectId,
       buildNoTraceUndoBlockedResult,
       buildReviewingRequiredBlockedResult,
