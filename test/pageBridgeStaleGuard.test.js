@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { createStoredZip } = require('./_helpers/storedZip');
 
 const projectFiles = require('../extension/src/shared/projectFiles');
 const overleafEditor = require('../extension/src/page/overleafEditor');
@@ -2892,9 +2893,23 @@ function createPageBridgeHarness({
   modernModeHidden = false,
   modernModeConflict = false,
   initialNativeChanges = [],
-  afterWriteGuard = null
+  afterWriteGuard = null,
+  autoSaveToServer = true,
+  serverFiles = files,
+  beforeServerSnapshot = null,
+  reviewConfirmationTimeoutMs = null
 }) {
   const fileMap = new Map(Object.entries(files));
+  const serverFileMap = new Map(Object.entries(serverFiles));
+  let serverSnapshotReads = 0;
+  function writeEditorFile(filePath, content) {
+    fileMap.set(filePath, content);
+    if (autoSaveToServer) serverFileMap.set(filePath, content);
+  }
+  function deleteEditorFile(filePath) {
+    fileMap.delete(filePath);
+    if (autoSaveToServer) serverFileMap.delete(filePath);
+  }
   const trackedChanges = initialNativeChanges.map(change => ({
     ...change, fragments: change.fragments.map(op => ({ ...op }))
   }));
@@ -3011,8 +3026,24 @@ function createPageBridgeHarness({
     document,
     AbortController,
     getComputedStyle: node => ({ display: node.hidden ? 'none' : 'block', visibility: 'visible', opacity: '1' }),
-    async fetch(url, options) {
-      const match = /^\/project\/([^/]+)\/doc\/([^/]+)\/changes\/accept$/.exec(String(url));
+    async fetch(url, options = {}) {
+      const request = new URL(String(url), window.location.origin);
+      assert.equal(request.origin, window.location.origin, 'fixture requests must remain same-origin');
+      const zip = /^\/project\/([^/]+)\/download\/zip$/.exec(request.pathname)
+        || /^\/download\/project\/([^/]+)$/.exec(request.pathname);
+      if (zip) {
+        assert.equal(decodeURIComponent(zip[1]), window._ide.project._id);
+        assert.equal(options.method || 'GET', 'GET');
+        assert.equal(options.credentials, 'include');
+        serverSnapshotReads++;
+        await beforeServerSnapshot?.({ window, reads: serverSnapshotReads });
+        // Build the actual ZIP response only from separately acknowledged server files.
+        const buffer = createStoredZip(Object.fromEntries(serverFileMap));
+        return { ok: true, status: 200,
+          headers: { get: name => name.toLowerCase() === 'content-type' ? 'application/zip' : '' },
+          arrayBuffer: async () => buffer };
+      }
+      const match = /^\/project\/([^/]+)\/doc\/([^/]+)\/changes\/accept$/.exec(request.pathname);
       assert.ok(match, 'only the native ID-scoped accept endpoint is allowed');
       assert.equal(decodeURIComponent(match[1]), window._ide.project._id);
       assert.equal(options.method, 'POST');
@@ -3073,6 +3104,8 @@ function createPageBridgeHarness({
     MouseEvent: class MouseEvent {},
     InputEvent: class InputEvent {},
     Event: class Event {},
+    AbortController, TextEncoder, TextDecoder,
+    fetch: (...args) => window.fetch(...args),
     setTimeout,
     clearTimeout,
     console,
@@ -3082,6 +3115,11 @@ function createPageBridgeHarness({
   vm.runInContext(otTextSource, context, { filename: 'otText.js' });
   vm.runInContext(overleafCapabilitiesSource, context, { filename: 'overleafCapabilities.js' });
   vm.runInContext(saveStateSource, context, { filename: 'saveState.js' });
+  if (Number.isFinite(reviewConfirmationTimeoutMs)) {
+    const confirm = window.CodexOverleafSaveState.confirmReviewWriteback;
+    window.CodexOverleafSaveState.confirmReviewWriteback = input =>
+      confirm({ ...input, timeoutMs: reviewConfirmationTimeoutMs });
+  }
   vm.runInContext(compileBridgeSource, context, { filename: 'compileBridge.js' });
   vm.runInContext(overleafEditorSource, context, { filename: 'overleafEditor.js' });
   vm.runInContext(overleafProjectSnapshotSource, context, { filename: 'overleafProjectSnapshot.js' });
@@ -3098,7 +3136,7 @@ function createPageBridgeHarness({
       writeGuardCalls++;
       await afterWriteGuard?.({ call: writeGuardCalls, result, window,
         setReviewing: value => { reviewingActive = value; },
-        setFile: (filePath, content) => { fileMap.set(filePath, content); } });
+        setFile: (filePath, content) => { writeEditorFile(filePath, content); } });
       return result;
     } };
   } };
@@ -3178,7 +3216,7 @@ function createPageBridgeHarness({
       return fileMap.get(filePath);
     },
     setFile(filePath, content) {
-      fileMap.set(filePath, content);
+      writeEditorFile(filePath, content);
     },
     getLastDispatchChanges() {
       return lastDispatchChanges == null ? null : JSON.parse(JSON.stringify(lastDispatchChanges));
@@ -3220,6 +3258,9 @@ function createPageBridgeHarness({
       return trackedChanges.length;
     },
     getNativeAcceptRequests() { return nativeAcceptRequests; },
+    getServerFile: filePath => serverFileMap.get(filePath),
+    getServerSnapshotReads: () => serverSnapshotReads,
+    acknowledgeServerSave: filePath => serverFileMap.set(filePath, fileMap.get(filePath)),
     getWriteGuardCalls() { return writeGuardCalls; },
     rerenderReviewIds() {
       trackedChanges.forEach((change, index) => { change.domId = 'rerendered-' + index; });
@@ -3304,7 +3345,7 @@ function createPageBridgeHarness({
             return;
           }
           const before = fileMap.get(editorPath) || '';
-          fileMap.set(editorPath, applyEditorChanges(fileMap.get(editorPath) || '', transaction.changes));
+          writeEditorFile(editorPath, applyEditorChanges(fileMap.get(editorPath) || '', transaction.changes));
           const patches = (Array.isArray(transaction.changes) ? transaction.changes : [transaction.changes])
             .slice().sort((a, b) => a.from - b.from);
           // Model non-overlapping CM transactions as native delete/insert fragments.
@@ -3352,12 +3393,12 @@ function createPageBridgeHarness({
   function createFileTreeManager() {
     return {
       createDoc(filePath, content) {
-        fileMap.set(filePath, content);
+        writeEditorFile(filePath, content);
       },
       renameEntity(filePath, to) {
         const content = fileMap.get(filePath);
-        fileMap.delete(filePath);
-        fileMap.set(to, content || '');
+        deleteEditorFile(filePath);
+        writeEditorFile(to, content || '');
         if (selectedPath === filePath) {
           selectedPath = to;
         }
@@ -3369,7 +3410,7 @@ function createPageBridgeHarness({
         this.renameEntity(filePath, to);
       },
       deleteEntity(filePath) {
-        fileMap.delete(filePath);
+        deleteEditorFile(filePath);
       }
     };
   }
@@ -3449,7 +3490,7 @@ function createPageBridgeHarness({
       click() {
         editorUndoClickCount += 1;
         if (Object.prototype.hasOwnProperty.call(editorUndoTargets, selectedPath)) {
-          fileMap.set(selectedPath, editorUndoTargets[selectedPath]);
+          writeEditorFile(selectedPath, editorUndoTargets[selectedPath]);
           for (let index = trackedChanges.length - 1; index >= 0; index--)
             if (trackedChanges[index].path === selectedPath) trackedChanges.splice(index, 1);
         }
@@ -3643,7 +3684,7 @@ function createPageBridgeHarness({
       click() {
         acceptClickCount += 1;
         acceptedChangeIds.push(change.id);
-        fileMap.set(change.path, change.after);
+        writeEditorFile(change.path, change.after);
         const index = trackedChanges.indexOf(change);
         if (index >= 0) {
           trackedChanges.splice(index, 1);
@@ -3680,7 +3721,7 @@ function createPageBridgeHarness({
       click() {
         rejectClickCount += 1;
         rejectedChangeIds.push(change.id);
-        fileMap.set(change.path, change.before);
+        writeEditorFile(change.path, change.before);
         const index = trackedChanges.indexOf(change);
         if (index >= 0) {
           trackedChanges.splice(index, 1);
@@ -3942,4 +3983,114 @@ for (const [label, mutate, code] of [
   assert.equal(result.ok, false);
   assert.equal(result.skipped[0].result.code, code);
   assert.equal(bridge.getDispatchCount(), 0);
+});
+
+function createSavedUndoHarness(extra = {}) {
+  return createPageBridgeHarness({
+    activePath: 'main.tex', reviewingOk: true,
+    initialNativeChanges: [{ id: 'seed-change', path: 'main.tex',
+      before: 'alpha beta gamma', after: 'alpha delta gamma',
+      fragments: [{ p: 6, d: 'beta' }, { p: 6, i: 'delta' }] }],
+    editorUndoTargets: { 'main.tex': 'alpha beta gamma' },
+    files: { 'main.tex': 'alpha delta gamma' },
+    autoSaveToServer: false,
+    ...extra
+  });
+}
+
+function rejectSavedUndo(bridge) {
+  return bridge.call('rejectTrackedChanges', {
+    trackedChanges: bridge.getNativeRefs('main.tex'),
+    expectedFiles: [{ path: 'main.tex', content: 'alpha beta gamma' }],
+    postFiles: [{ path: 'main.tex', content: 'alpha delta gamma' }]
+  });
+}
+
+test('page bridge waits for independent server acknowledgement before confirming Undo', async () => {
+  let releaseRead, signalRead, completed = false;
+  const readStarted = new Promise(resolve => { signalRead = resolve; });
+  const readAllowed = new Promise(resolve => { releaseRead = resolve; });
+  const bridge = createSavedUndoHarness({
+    beforeServerSnapshot: async () => { signalRead(); await readAllowed; }
+  });
+  const pending = rejectSavedUndo(bridge).then(result => { completed = true; return result; });
+  await readStarted;
+  assert.equal(bridge.getFile('main.tex'), 'alpha beta gamma');
+  assert.equal(bridge.getServerFile('main.tex'), 'alpha delta gamma');
+  assert.equal(completed, false, 'local editor restoration alone cannot settle the review');
+  bridge.acknowledgeServerSave('main.tex');
+  releaseRead();
+  const result = await pending;
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.saveVerification.state, 'verified_saved');
+  assert.equal(result.saveVerification.source, 'overleaf-zip');
+  assert.equal(bridge.getServerSnapshotReads(), 1);
+  assert.equal(bridge.getEditorUndoClickCount(), 1, 'confirmation must not replay the mutation');
+});
+
+test('page bridge retains uncertainty when Undo never reaches server storage', async () => {
+  const bridge = createSavedUndoHarness({ reviewConfirmationTimeoutMs: 25 });
+  const result = await rejectSavedUndo(bridge);
+  assert.equal(result.ok, false);
+  assert.equal(result.skipped[0].result.code, 'undo_not_verified');
+  assert.equal(result.saveVerification.state, 'unknown_timeout');
+  assert.equal(bridge.getFile('main.tex'), 'alpha beta gamma');
+  assert.equal(bridge.getServerFile('main.tex'), 'alpha delta gamma');
+  assert.ok(bridge.getServerSnapshotReads() > 0);
+  assert.equal(bridge.getEditorUndoClickCount(), 1);
+});
+
+test('page bridge keeps Undo uncertain when server ZIP download fails', async () => {
+  const bridge = createSavedUndoHarness({
+    reviewConfirmationTimeoutMs: 25,
+    beforeServerSnapshot: () => { throw new Error('simulated download failure'); }
+  });
+  const result = await rejectSavedUndo(bridge);
+  assert.equal(result.ok, false);
+  assert.equal(result.skipped[0].result.failure.terminalState, 'needs_review');
+  assert.equal(result.saveVerification.state, 'unknown_timeout');
+  assert.equal(bridge.getFile('main.tex'), 'alpha beta gamma');
+  assert.equal(bridge.getServerFile('main.tex'), 'alpha delta gamma');
+});
+
+test('page bridge cannot confirm Undo from another project after server read navigation', async () => {
+  const bridge = createSavedUndoHarness({
+    autoSaveToServer: true,
+    beforeServerSnapshot: ({ window }) => {
+      window.location.pathname = '/project/other-project';
+      window.location.href = window.location.origin + window.location.pathname;
+      window._ide.project._id = 'other-project';
+    }
+  });
+  const result = await rejectSavedUndo(bridge);
+  assert.equal(result.ok, false);
+  assert.equal(result.skipped[0].result.code, 'undo_not_verified');
+  assert.equal(bridge.getServerSnapshotReads(), 1);
+  assert.equal(bridge.getEditorUndoClickCount(), 1);
+});
+
+test('page bridge requires every Undo target to be saved, including nested files', async () => {
+  const bridge = createSavedUndoHarness({
+    reviewConfirmationTimeoutMs: 25,
+    initialNativeChanges: [
+      { id: 'a', path: 'main.tex', before: 'before-a', after: 'after-a',
+        fragments: [{ p: 0, d: 'before-a' }, { p: 0, i: 'after-a' }] },
+      { id: 'b', path: 'sub/nested.tex', before: 'before-b', after: 'after-b',
+        fragments: [{ p: 0, d: 'before-b' }, { p: 0, i: 'after-b' }] }
+    ],
+    files: { 'main.tex': 'after-a', 'sub/nested.tex': 'after-b' },
+    serverFiles: { 'main.tex': 'before-a', 'sub/nested.tex': 'after-b' },
+    editorUndoTargets: { 'main.tex': 'before-a', 'sub/nested.tex': 'before-b' }
+  });
+  const result = await bridge.call('rejectTrackedChanges', {
+    trackedChanges: [...bridge.getNativeRefs('main.tex'), ...bridge.getNativeRefs('sub/nested.tex')],
+    expectedFiles: [{ path: 'main.tex', content: 'before-a' }, { path: 'sub/nested.tex', content: 'before-b' }],
+    postFiles: [{ path: 'main.tex', content: 'after-a' }, { path: 'sub/nested.tex', content: 'after-b' }]
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.skipped[0].result.code, 'undo_not_verified');
+  assert.equal(result.applied.length, 2);
+  assert.equal(bridge.getFile('sub/nested.tex'), 'before-b');
+  assert.equal(bridge.getServerFile('sub/nested.tex'), 'after-b');
+  assert.equal(bridge.getEditorUndoClickCount(), 2);
 });
