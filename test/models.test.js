@@ -7,6 +7,9 @@ const {
 } = require('../extension/src/shared/models');
 
 const FALLBACK_IDS = [
+  'gpt-6-astra',
+  'gpt-6-sol',
+  'gpt-6-luna',
   'gpt-5.5',
   'gpt-5.4',
   'gpt-5.4-mini',
@@ -18,6 +21,9 @@ const FALLBACK_IDS = [
 test('fallback model ids keep the v0.1.1 UI order', () => {
   assert.deepEqual(FALLBACK_MODELS.map(model => model.id), FALLBACK_IDS);
   assert.deepEqual(FALLBACK_MODELS.map(model => model.label), [
+    'GPT-6 Astra',
+    'GPT-6 Sol',
+    'GPT-6 Luna',
     'GPT-5.5',
     'GPT-5.4',
     'GPT-5.4 Mini',
@@ -25,6 +31,15 @@ test('fallback model ids keep the v0.1.1 UI order', () => {
     'GPT-5.3 Codex Spark',
     'GPT-5.2'
   ]);
+});
+
+test('GPT-6 fallback options retain their supported reasoning tiers', () => {
+  const result = normalizeDiscoveredModels({ models: [] });
+  const byId = new Map(result.models.map(model => [model.id, model]));
+
+  assert.deepEqual(byId.get('gpt-6-astra').reasoningEfforts, ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.deepEqual(byId.get('gpt-6-sol').reasoningEfforts, ['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+  assert.deepEqual(byId.get('gpt-6-luna').reasoningEfforts, ['none', 'low', 'medium', 'high', 'xhigh', 'max']);
 });
 
 test('fallback normalization returns a copy that callers cannot use to mutate the global fallback', () => {

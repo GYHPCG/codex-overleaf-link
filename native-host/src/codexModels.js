@@ -235,8 +235,8 @@ function buildFallbackModels() {
   return FALLBACK_MODELS.map(model => buildModelEntry({
     id: model.id,
     label: model.label,
-    reasoningEfforts: DEFAULT_REASONING_EFFORTS,
-    defaultReasoningEffort: 'medium',
+    reasoningEfforts: model.reasoningEfforts || DEFAULT_REASONING_EFFORTS,
+    defaultReasoningEffort: model.defaultReasoningEffort || 'medium',
     speedTiers: DEFAULT_SPEED_TIERS,
     defaultSpeedTier: 'standard'
   }));

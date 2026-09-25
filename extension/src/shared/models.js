@@ -8,6 +8,21 @@
   'use strict';
 
   const FALLBACK_MODELS = Object.freeze([
+    Object.freeze({
+      id: 'gpt-6-astra',
+      label: 'GPT-6 Astra',
+      reasoningEfforts: Object.freeze(['low', 'medium', 'high', 'xhigh', 'max'])
+    }),
+    Object.freeze({
+      id: 'gpt-6-sol',
+      label: 'GPT-6 Sol',
+      reasoningEfforts: Object.freeze(['none', 'low', 'medium', 'high', 'xhigh', 'max'])
+    }),
+    Object.freeze({
+      id: 'gpt-6-luna',
+      label: 'GPT-6 Luna',
+      reasoningEfforts: Object.freeze(['none', 'low', 'medium', 'high', 'xhigh', 'max'])
+    }),
     Object.freeze({ id: 'gpt-5.5', label: 'GPT-5.5' }),
     Object.freeze({ id: 'gpt-5.4', label: 'GPT-5.4' }),
     Object.freeze({ id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' }),

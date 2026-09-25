@@ -118,6 +118,9 @@ test('resolveCodexModels falls back when Codex caches are missing or unusable', 
     const result = resolveCodexModels({}, { HOME: home });
 
     assert.equal(result.source, 'fallback');
+    assert.deepEqual(result.models.slice(0, 3).map(model => model.id), ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']);
+    assert.deepEqual(result.models[0].reasoningEfforts, ['low', 'medium', 'high', 'xhigh', 'max']);
+    assert.deepEqual(result.models[1].reasoningEfforts, ['none', 'low', 'medium', 'high', 'xhigh', 'max']);
     assert.equal(result.models.some(model => model.id === 'gpt-5.5'), true);
     assert.equal(result.models.every(model => Array.isArray(model.reasoningEfforts)), true);
     assert.equal(result.models.every(model => model.defaultReasoningEffort === 'medium'), true);
