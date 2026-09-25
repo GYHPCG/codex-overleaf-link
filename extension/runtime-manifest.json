@@ -4,7 +4,9 @@
     "https://www.overleaf.com/project",
     "https://overleaf.com/project",
     "https://www.overleaf.com/project/*",
-    "https://overleaf.com/project/*"
+    "https://overleaf.com/project/*",
+    "https://latex.cstcloud.cn/project",
+    "https://latex.cstcloud.cn/project/*"
   ],
   "js": [
     "src/content/generated/content.bundle.js"

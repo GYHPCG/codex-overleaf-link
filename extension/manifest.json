@@ -1,15 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "Codex Overleaf Link",
+  "name": "Codex Overleaf Link (CSTCloud)",
   "version": "2.4.1",
-  "description": "Connect the active Overleaf project to a local Codex bridge.",
+  "description": "Connect a CSTCloud Overleaf project to a local Codex bridge.",
   "icons": {
     "16": "assets/icons/icon16.png",
     "32": "assets/icons/icon32.png",
     "48": "assets/icons/icon48.png",
     "128": "assets/icons/icon128.png"
   },
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlvUmSiwPTRFSmr9fVJ8HTtlCaYP34o4zrLvqqJV3Ha4+QWQuBTkLmbONvDm7heCh8sDqUzMBA7yPtLu5kGtx85FnHBxWcasgLMmdSfGKcfApVyQGfEJ9WoRYsr1QVG9xTdAmtIa5zdFFHdfLN3OrBgxLDSt2jjpiEZbs9w3VLlsJlVY2y+98L86RywHQzk/l2OEwIJ2Waa7ef0mRnNMQ0k7S1xJNFV5YOMHEc06+OkCg32zJlfGhHY+NVzpxgCYvJEPB/SR2JLLi1U43jvIStCXBZeQ1cT10tXvgwV1F7RPbA9cjelzyamW9yhK3XlyD7TnPiYfvOOYxDByP9s8H7QIDAQAB",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvxpz+S8iVfK0QMO6eT8Fr2z6L/8qIn/yv/nTdgAOB0uQnG24JMcrYFcNe1K4uaQlkOOYBmIbGwP4AgDRDOfUZostPZ84l95TxN+ZZ4PWn1APaP0vDg771ZydQEPjeB/LLGgJrIBghuvGgO2CvL6cBgg49WXNyVWxloe9blBgR97KhABiWmKIj8ZBo3oDWhinG9KKDa2FguBl2Rm0JtmZBARodoAtFxN/P8cewRXr4gmAd6oHx7T3JXVL6PKL+of24ynx16+Vdc2J4uUsXCQ1LE/pN7tOF5HvP8VR/MKMw2wvLFdblHnMej2qR84zfyVZwBm9/AJUvzwgVLo0WJmGYwIDAQAB",
   "permissions": [
     "alarms",
     "nativeMessaging",
@@ -19,7 +19,9 @@
     "https://www.overleaf.com/project",
     "https://overleaf.com/project",
     "https://www.overleaf.com/project/*",
-    "https://overleaf.com/project/*"
+    "https://overleaf.com/project/*",
+    "https://latex.cstcloud.cn/project",
+    "https://latex.cstcloud.cn/project/*"
   ],
   "background": {
     "service_worker": "src/background.js"
@@ -30,7 +32,9 @@
         "https://www.overleaf.com/project",
         "https://overleaf.com/project",
         "https://www.overleaf.com/project/*",
-        "https://overleaf.com/project/*"
+        "https://overleaf.com/project/*",
+        "https://latex.cstcloud.cn/project",
+        "https://latex.cstcloud.cn/project/*"
       ],
       "js": [
         "src/content/generated/content.bundle.js"
@@ -77,12 +81,13 @@
       ],
       "matches": [
         "https://www.overleaf.com/*",
-        "https://overleaf.com/*"
+        "https://overleaf.com/*",
+        "https://latex.cstcloud.cn/*"
       ]
     }
   ],
   "action": {
-    "default_title": "Codex Overleaf Link",
+    "default_title": "Codex Overleaf Link (CSTCloud)",
     "default_icon": {
       "16": "assets/icons/icon16.png",
       "32": "assets/icons/icon32.png",

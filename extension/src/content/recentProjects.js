@@ -359,7 +359,7 @@
     if (!isValidProjectId(projectId)) {
       return;
     }
-    window.location.assign('https://www.overleaf.com/project/' + encodeURIComponent(projectId));
+    window.location.assign(window.location.origin + '/project/' + encodeURIComponent(projectId));
   }
 
   function renderActionsMenu(buttons) {
@@ -681,7 +681,7 @@
   }
 
   function projectPanelStateKey(projectId) {
-    return StorageKeys.getProjectStorageKey(PANEL_STATE_BASE_KEY, 'https://www.overleaf.com/project/' + projectId);
+    return StorageKeys.getProjectStorageKey(PANEL_STATE_BASE_KEY, window.location.origin + '/project/' + projectId);
   }
 
   // Apply `mutate(normalizedState) -> nextState` to the project's stored panel

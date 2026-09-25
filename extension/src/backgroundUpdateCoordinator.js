@@ -25,7 +25,9 @@
     'https://www.overleaf.com/project',
     'https://overleaf.com/project',
     'https://www.overleaf.com/project/*',
-    'https://overleaf.com/project/*'
+    'https://overleaf.com/project/*',
+    'https://latex.cstcloud.cn/project',
+    'https://latex.cstcloud.cn/project/*'
   ];
   const MESSAGE_TYPES = new Set([
     'codex-overleaf/consent-update-get-state',
@@ -486,7 +488,7 @@
     try {
       const url = new URL(tab.url || '');
       return url.protocol === 'https:' &&
-        (url.hostname === 'www.overleaf.com' || url.hostname === 'overleaf.com') &&
+        (url.hostname === 'www.overleaf.com' || url.hostname === 'overleaf.com' || url.hostname === 'latex.cstcloud.cn') &&
         /^\/project\/[^/]+(?:\/|$)/.test(url.pathname);
     } catch (_error) {
       return false;
@@ -853,7 +855,7 @@
         return url.pathname === '/bootstrap/popup.html';
       }
       return url.protocol === 'https:' &&
-        (url.hostname === 'www.overleaf.com' || url.hostname === 'overleaf.com') &&
+        (url.hostname === 'www.overleaf.com' || url.hostname === 'overleaf.com' || url.hostname === 'latex.cstcloud.cn') &&
         (url.pathname === '/project' || url.pathname.startsWith('/project/'));
     } catch (_error) {
       return false;

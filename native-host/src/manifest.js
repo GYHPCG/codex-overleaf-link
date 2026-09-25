@@ -3,9 +3,9 @@
 const os = require('node:os');
 const path = require('node:path');
 
-const HOST_NAME = 'com.codex.overleaf';
-const HOST_DESCRIPTION = 'Codex Overleaf local bridge';
-const DEFAULT_CHROME_EXTENSION_ID = 'illdpneeeopfffmiepaejglgmhpmdhdc';
+const HOST_NAME = 'com.codex.overleaf.cstcloud';
+const HOST_DESCRIPTION = 'Codex Overleaf Link CSTCloud local bridge';
+const DEFAULT_CHROME_EXTENSION_ID = 'baebbifpfkkmbomoioanolpnjmfhpbad';
 
 const MACOS_MANIFEST_DIRS = {
   chrome: 'Library/Application Support/Google/Chrome/NativeMessagingHosts',

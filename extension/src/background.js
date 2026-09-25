@@ -28,7 +28,7 @@ if (!globalThis.CodexOverleafUpdateRuntimeIdentity) {
 (function initBackground() {
   'use strict';
 
-  const HOST_NAME = 'com.codex.overleaf';
+  const HOST_NAME = 'com.codex.overleaf.cstcloud';
   const MANAGED_UPDATE_STATE_KEY = 'codex-overleaf-managed-update-state-v1';
   const MANAGED_UPDATE_CONSENT_KEY = 'codex-overleaf-update-consent-v1';
   const MANAGED_UPDATE_TABS_KEY = 'codex-overleaf-managed-update-tabs-v1';
@@ -36,7 +36,9 @@ if (!globalThis.CodexOverleafUpdateRuntimeIdentity) {
     'https://www.overleaf.com/project',
     'https://overleaf.com/project',
     'https://www.overleaf.com/project/*',
-    'https://overleaf.com/project/*'
+    'https://overleaf.com/project/*',
+    'https://latex.cstcloud.cn/project',
+    'https://latex.cstcloud.cn/project/*'
   ];
   const COMPATIBILITY_REQUIRED_METHODS = new Set([
     'codex.run',
@@ -382,7 +384,7 @@ if (!globalThis.CodexOverleafUpdateRuntimeIdentity) {
     try {
       const url = new URL(tab?.url || '');
       return url.protocol === 'https:' &&
-        (url.hostname === 'www.overleaf.com' || url.hostname === 'overleaf.com') &&
+        (url.hostname === 'www.overleaf.com' || url.hostname === 'overleaf.com' || url.hostname === 'latex.cstcloud.cn') &&
         /^\/project\/[^/]+(?:\/|$)/.test(url.pathname);
     } catch (_error) {
       return false;
@@ -853,7 +855,7 @@ if (!globalThis.CodexOverleafUpdateRuntimeIdentity) {
     try {
       const url = new URL(senderUrl);
       return url.protocol === 'https:' && (
-        url.hostname === 'www.overleaf.com' || url.hostname === 'overleaf.com'
+        url.hostname === 'www.overleaf.com' || url.hostname === 'overleaf.com' || url.hostname === 'latex.cstcloud.cn'
       );
     } catch (_error) {
       return false;

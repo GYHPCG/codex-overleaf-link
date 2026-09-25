@@ -43,8 +43,8 @@ function getDefaultManagedNativeRoot(options = {}) {
 function getDefaultBridgePath(options = {}) {
   const platformPath = getPathModule(options);
   const bridgeName = getNativeHostPlatform(options) === 'win32'
-    ? 'codex-overleaf-bridge.cmd'
-    : 'codex-overleaf-bridge';
+    ? 'codex-overleaf-cstcloud-bridge.cmd'
+    : 'codex-overleaf-cstcloud-bridge';
   return platformPath.join(getCodexOverleafHome(options), bridgeName);
 }
 
