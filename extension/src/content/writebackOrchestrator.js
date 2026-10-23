@@ -398,9 +398,12 @@
       })
       : null;
     const hasSkippedApplyResult = skippedEntries.length > 0;
-    const writebackIncomplete = !hasConfirmedApplyResult || hasSkippedApplyResult;
+    const hasUnverifiedSave = appliedPaths.length > 0 && saveVerification?.state !== 'verified_saved';
+    const writebackIncomplete = !hasConfirmedApplyResult || hasSkippedApplyResult || hasUnverifiedSave;
     const summaryLine = appendChangeSummary({
-      notes: hasConfirmedApplyResult
+      notes: hasUnverifiedSave
+        ? tx('Changes reached the Overleaf editor, but saved content is not confirmed. Synchronization is incomplete.', '改动已到达 Overleaf 编辑器，但尚未确认保存，不能视为同步完成。')
+        : hasConfirmedApplyResult
         ? tx('Local Codex changes were synced back to Overleaf.', '本地 Codex 改动已同步回 Overleaf。')
         : tx('Local Codex changes were sent to Overleaf, but Codex could not confirm the write result.', '本地 Codex 改动已发送到 Overleaf，但 Codex 没能确认写入结果。'),
       operations,
@@ -414,14 +417,23 @@
     const unconfirmedSyncConclusion = assistantMessage
       ? `${assistantMessage}\n\n${tx('Writeback note: Codex could not confirm any Overleaf write result entries, so local mirror refresh and auto compile were skipped.', '写入提示：Codex 没能确认任何 Overleaf 写入结果条目，因此已跳过本地 mirror 刷新和自动编译。')}`
       : tx('Codex tried to write local changes to Overleaf, but the write result did not confirm any applied or skipped entries.', 'Codex 已尝试把本地改动写入 Overleaf，但写入结果没有确认任何已写入或已跳过条目。');
+    const saveUnconfirmedConclusion = tx(
+      'Changes reached the Overleaf editor, but Codex could not confirm they were saved. Synchronization is incomplete; inspect the edited files and save status before retrying.',
+      '改动已到达 Overleaf 编辑器，但 Codex 未能确认已保存。同步尚未完成；请先检查修改文件及网页保存状态，再决定是否重试。'
+    );
     const writebackConclusion = !hasConfirmedApplyResult
       ? unconfirmedSyncConclusion
-      : hasSkippedApplyResult
+      : hasUnverifiedSave
+        ? saveUnconfirmedConclusion
+        : hasSkippedApplyResult
         ? partialSyncConclusion
         : syncedConclusion;
     const writebackNextStep = !hasConfirmedApplyResult
       ? tx('Check Overleaf manually before running again. Local mirror refresh and auto compile were skipped.', '再次运行前请先手动检查 Overleaf。本地 mirror 刷新和自动编译已跳过。')
-      : hasSkippedApplyResult
+      : hasUnverifiedSave
+        ? tx('Check the edited files and Overleaf save status. The local mirror was not marked synchronized. Avoid resubmitting the same edits until saved content is confirmed.',
+          '请检查修改文件和 Overleaf 保存状态。本地镜像未标记为已同步；确认保存内容前，请勿重复提交同一修改。')
+        : hasSkippedApplyResult
         ? formatWritebackSkippedNextStep(applied)
         : tx('Review the synced file in Overleaf.', '请在 Overleaf 中查看同步后的文件。');
     appendCompletionReport({
@@ -445,6 +457,7 @@
 
     return {
       summaryLine,
+      hasUnverifiedSave,
       hasSkippedOperations: writebackIncomplete || hasSkippedApplyOperations([applied]),
       // Welcome-panel + write-guard: expose the raw applied
       // result so the post-navigation settlement (spec §5.7.1) can classify
@@ -469,7 +482,7 @@
         blockedFiles: additionalSkippedEntries
           .filter(item => item.result?.code === 'governance_blocked')
           .map(item => summarizeOperationForAudit(item.operation, item.result, 'blocked')),
-        resultStatus: writebackIncomplete ? 'completed_with_skips' : 'completed',
+        resultStatus: hasUnverifiedSave ? 'failed' : writebackIncomplete ? 'completed_with_skips' : 'completed',
         saveVerification
       })
     };

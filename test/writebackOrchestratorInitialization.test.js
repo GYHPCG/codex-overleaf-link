@@ -86,3 +86,67 @@ test('governance-only rejection remains visible in the completion report', async
   assert.equal(completionReport.unchangedReason, skippedEntry.result.reason);
   assert.match(completionReport.nextStep, /Review the skipped reasons/);
 });
+
+for (const saveState of ['verified_saved', 'verified_quiet', 'unknown_timeout', 'unavailable']) {
+  test(`writeback completion respects save evidence: ${saveState}`, async () => {
+    const windowObject = {};
+    new Function('window', source)(windowObject);
+    const operation = { type: 'edit', path: 'main.tex' };
+    const applied = { ok: true, applied: [{ operation, result: { ok: true } }], skipped: [] };
+    let report;
+    let summary;
+    let confirms = 0;
+    let undoRecorded = false;
+    const orchestrator = windowObject.CodexOverleafWritebackOrchestrator.create({
+      tr: key => key, tx: english => english,
+      getState: () => ({ mode: 'auto', requireReviewing: false }),
+      getCurrentRunView: () => ({ runProjectId: 'project' }),
+      getCurrentProjectId: () => 'project',
+      cleanFinalAnswer: value => value,
+      getAssistantAnswerForCurrentRun: () => 'Edited successfully.',
+      buildSyncApplyOperations: () => [operation],
+      partitionUnsafeProjectPathOperations: operations => ({ safe: operations, skipped: [] }),
+      evaluateGovernedOperations: operations => ({ allowed: operations, blocked: [] }),
+      confirmBinaryOperations: async operations => ({ operations, skipped: [] }),
+      ensureReviewingBeforeWrite: async () => ({ ok: true }),
+      assetTransferBroker: { applyOperations: async () => applied },
+      mergeApplyResultSkipped: result => result,
+      appendRunEvent() {}, appendOperationsPreview() {}, appendApplyResult() {},
+      renderReadOnlyDiffReview() {},
+      getSkippedEntries: result => result.skipped,
+      hasApplyResultEntries: result => result.applied.length > 0,
+      getAppliedSyncChanges: changes => changes,
+      getAppliedOperationPaths: () => ['main.tex'],
+      recordUndoFromApply: () => { undoRecorded = true; },
+      callPageBridge: async method => {
+        assert.equal(method, 'waitForSaveState');
+        return { ok: saveState === 'verified_saved', state: saveState };
+      },
+      sendBackgroundNative: async request => {
+        assert.equal(request.method, 'mirror.confirmWriteback');
+        confirms += 1;
+        return { ok: true, result: { ok: true } };
+      },
+      appendChangeSummary: value => { summary = value; return value.notes; },
+      appendCompletionReport: value => { report = value; },
+      hasSkippedApplyOperations: () => false,
+      buildAuditSummaryFromApply: input => input,
+      writebackSettlement: { settle: input => input }
+    });
+    const outcome = await orchestrator.applySyncChangesToOverleaf([{ path: 'main.tex' }], {},
+      { mode: 'auto', assistantMessage: 'Edited successfully.', autoRecompile: false });
+    await orchestrator.getPendingMirrorRefresh();
+    assert.equal(undoRecorded, true, 'written changes retain their undo checkpoint');
+    const verified = saveState === 'verified_saved';
+    assert.equal(outcome.hasUnverifiedSave, !verified);
+    assert.equal(report.status, verified ? 'completed' : 'failed');
+    assert.equal(confirms, verified ? 1 : 0, 'unverified saves cannot confirm the local mirror');
+    if (!verified) {
+      assert.equal(outcome.hasSkippedOperations, true);
+      assert.equal(outcome.audit.resultStatus, 'failed');
+      assert.match(summary.notes, /Synchronization is incomplete/);
+      assert.match(report.conclusion, /could not confirm they were saved/);
+      assert.match(report.nextStep, /Avoid resubmitting/);
+    }
+  });
+}

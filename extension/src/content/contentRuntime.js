@@ -2324,11 +2324,13 @@
       await finalizeAuditRecord(runAuditDraft, {
         ...(syncOutcome.audit || {}),
         sensitiveFindings: sensitiveFindings.findings,
-        resultStatus: syncOutcome.hasSkippedOperations ? 'completed_with_skips' : 'completed'
+        resultStatus: syncOutcome.hasUnverifiedSave ? 'failed' : syncOutcome.hasSkippedOperations ? 'completed_with_skips' : 'completed'
       });
 
       await finishRunView(
-        syncOutcome.hasSkippedOperations ? tx('Sync completed with skipped items', '同步完成但有跳过项') : tx('Sync completed', '同步完成'),
+        syncOutcome.hasUnverifiedSave
+          ? tx('Written to editor; save unconfirmed', '已写入编辑器，保存待确认')
+          : syncOutcome.hasSkippedOperations ? tx('Sync completed with skipped items', '同步完成但有跳过项') : tx('Sync completed', '同步完成'),
         syncOutcome.hasSkippedOperations ? 'failed' : 'completed'
       );
       // Welcome-panel + write-guard:
