@@ -1,6 +1,23 @@
 > [!NOTE]
 > This development branch can contain unreleased changes. Version-pinned commands below apply after the corresponding release is published. Published installers are available from the [latest stable release](https://github.com/Ghqqqq/codex-overleaf-link/releases/latest).
 
+## 最新更新
+
+### 2026-10-23
+
+**优化**
+
+- CSTCloud 适配版在任务开始时先等待已启动的项目预加载，再检查镜像，减少重复下载；同时合并并发的后台 ZIP 下载。
+- 局部论文润色优先阅读目标段落及必要上下文，并按修改范围选择验证步骤。
+
+**新增**
+
+- 任务过程显示工作区准备、完整项目下载、Codex 处理及网页回写与验证的耗时；同时显示本地环境、会话就绪和模型首次文字输出时间。
+
+这些改动针对本仓库的 CSTCloud 自定义版本。更新后需在 Chrome 扩展页面重新加载扩展，并刷新论文项目页。实际提速取决于项目大小、缓存是否可用和模型响应时间，尚未完成真实论文任务的前后对比。
+
+[完整更新记录与本机更新方法](docs/releases/release-notes.md)
+
 <div align="center">
   <img src="extension/assets/icons/codex-overleaf-icon.png" width="96" alt="Codex Overleaf Link">
   <h1>Codex Overleaf Link</h1>

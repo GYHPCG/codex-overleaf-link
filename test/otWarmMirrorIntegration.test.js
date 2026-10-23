@@ -64,6 +64,44 @@ test('OT startup accepts the actual JSON page-bridge response and starts polling
   assert.equal(timers.size, 0);
 });
 
+test('warm startup waits for in-flight preload before checking mirror freshness', async () => {
+  let release;
+  let preloadStarted;
+  const started = new Promise(resolve => { preloadStarted = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  let ready = false;
+  let probes = 0;
+  let snapshots = 0;
+  const fixture = createHarness({
+    mirrorHealth: {
+      shouldStartPrefetch: () => ({ ok: true }),
+      classifyMirrorHealth: status => ({ reusable: status.exists })
+    },
+    syncCustomInstructionsEditorForProject() {},
+    sanitizeRunProjectSnapshot: project => project,
+    getMirrorFreshness: async () => { probes += 1; return { exists: ready }; },
+    buildSnapshotFileOverlays: project => project.files,
+    normalizeSnapshotPath: path => path,
+    callPageBridge: async (_method, params) => {
+      if (params.requireFullProject) snapshots += 1;
+      return { capabilities: { fullProjectSnapshot: params.requireFullProject === true },
+        files: [{ path: 'main.tex', content: 'Current text' }] };
+    },
+    sendBackgroundNative: async () => { preloadStarted(); await gate; ready = true; return { ok: true }; }
+  });
+  fixture.mirror.scheduleMirrorPrefetch({ delayMs: 0 });
+  await fixture.runTimer(0);
+  await started;
+  const warm = fixture.mirror.resolveWarmRunStart({ focusFiles: ['main.tex'], mode: 'auto' });
+  await new Promise(setImmediate);
+  assert.equal(probes, 0, 'freshness must be checked after preload settles');
+  release();
+  const result = await warm;
+  assert.equal(result.useExistingMirror, true);
+  assert.equal(snapshots, 1, 'only the preload downloads the full project');
+  assert.equal(result.fileOverlays[0].content, 'Current text');
+});
+
 test('a delayed initial file identity becomes observable without a phantom edit', async () => {
   const fixture = createHarness();
   fixture.setActivePath('');

@@ -67,6 +67,26 @@
       return formatContextCompactionCheckpoint(event, locale);
     }
 
+    if (type === 'codex.performance') {
+      const labels = {
+        home_ready: ['本地运行环境准备', 'Local environment ready'],
+        app_server_ready: ['Codex 进程就绪（累计）', 'Codex process ready (total)'],
+        thread_ready: ['会话就绪（累计）', 'Conversation ready (total)'],
+        first_output: ['模型首次文字输出', 'First model text'],
+        completed: ['Codex 运行总耗时', 'Total Codex runtime'],
+        failed: ['Codex 中止前耗时', 'Codex time before stopping']
+      };
+      const label = labels[event.detail?.phase];
+      if (!label) return technicalOnly(event, locale);
+      const seconds = (Math.max(0, Number(event.detail?.durationMs) || 0) / 1000).toFixed(1);
+      return {
+        kind: 'activity', visible: true,
+        title: textFor(locale, `${label[0]}：${seconds} 秒`, `${label[1]}: ${seconds}s`),
+        status: event.status || 'completed',
+        technicalDetail: normalizeRawEvent(event)
+      };
+    }
+
     if (type === 'overleaf.sync.started') {
       const fileCount = Number(event.detail?.fileCount) || 0;
       return {

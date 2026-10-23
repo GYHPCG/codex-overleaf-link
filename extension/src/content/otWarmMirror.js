@@ -829,6 +829,10 @@
     const projectId = getCurrentProjectId();
     const focusFiles = taskContext.focusFiles || [];
     const mode = taskContext.mode || getState()?.mode;
+    // Finish an already-running preload before testing freshness. Otherwise
+    // a cold mirror is checked too early and triggers a second full ZIP read.
+    if (mirrorPrefetchState.inFlight || mirrorPrefetchState.timer) await settleMirrorPrefetchBeforeRun();
+    if (getCurrentProjectId() !== projectId) return { useExistingMirror: false, reason: 'project_changed' };
     const mirrorStatus = await getMirrorFreshness();
     if (getCurrentProjectId() !== projectId) return { useExistingMirror: false, reason: 'project_changed' };
     const otWarmStart = otWarmMirrorController.canUseOtWarmStart({

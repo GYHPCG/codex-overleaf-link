@@ -1915,7 +1915,8 @@
       }
 
       let focusFiles = [...executionSnapshot.focusFiles];
-      const warmStart = await awaitRunStep(resolveWarmRunStart({ focusFiles, mode: submittedMode }));
+      const warmStart = await awaitRunStep(measureRunStage(tx('Workspace preparation', '工作区准备'),
+        () => resolveWarmRunStart({ focusFiles, mode: submittedMode })));
       let project = warmStart.project || null;
       let useExistingMirror = warmStart.useExistingMirror;
       let fileOverlays = warmStart.fileOverlays || null;
@@ -1925,7 +1926,7 @@
           title: tx('Syncing the Overleaf project to the local Codex workspace.', '正在同步 Overleaf 项目到本地 Codex workspace。'),
           status: 'running'
         });
-        project = await awaitRunStep(getRunProjectSnapshot());
+        project = await awaitRunStep(measureRunStage(tx('Full project download', '完整项目下载'), getRunProjectSnapshot));
       }
       throwIfRunCancellationRequested();
       if (!useExistingMirror) {
@@ -2309,13 +2310,13 @@
       const writebackProject = useExistingMirror
         ? mergeProjectWithSyncChangeBaseFiles(project, syncChanges)
         : project;
-      const syncOutcome = await applySyncChangesToOverleaf(syncChanges, writebackProject, {
+      const syncOutcome = await measureRunStage(tx('Writeback and validation', '网页回写与验证'), () => applySyncChangesToOverleaf(syncChanges, writebackProject, {
         assistantMessage,
         unsupportedChanges: response.result.unsupportedChanges || [],
         mode: submittedMode,
         requireReviewing: submittedRequireReviewing,
         autoRecompile: executionSnapshot.autoRecompile
-      });
+      }));
       runSettlementPersistence.applyToCurrentRun(syncOutcome.settlement);
       if (runCancellationRequested) {
         throw createRunCancellationError();
@@ -3082,6 +3083,27 @@
     };
   }
 
+  async function measureRunStage(label, action) {
+    const view = currentRunView;
+    const startedAt = performance.now();
+    let completed = false;
+    try {
+      const result = await action();
+      completed = true;
+      return result;
+    } finally {
+      if (view && currentRunView === view) {
+        const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
+        const seconds = (durationMs / 1000).toFixed(1);
+        appendRunEvent({
+          title: tx(`${label}: ${seconds}s`, `${label}：${seconds} 秒`),
+          status: completed ? 'completed' : 'failed',
+          technicalDetail: { stage: label, durationMs }
+        });
+      }
+    }
+  }
+
   async function sendTrackedCodexRun(params) {
     const compatibilityGate = await nativeCompatibilityController.ensureForMethod('codex.run');
     if (!compatibilityGate.ok) {
@@ -3106,7 +3128,7 @@
       });
       saveStateSoon();
     }
-    return tracked.promise.finally(() => {
+    return measureRunStage(tx('Codex processing', 'Codex 处理'), () => tracked.promise).finally(() => {
       if (currentRunView?.nativeRequestId === tracked.id) {
         currentRunView.activeTurn = null;
         renderPendingInputs();

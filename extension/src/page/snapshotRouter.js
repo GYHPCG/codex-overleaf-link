@@ -22,6 +22,7 @@
       : () => '';
     let invalidatedAt = 0;
     let preferredZipEndpoint = '';
+    const pendingZipDownloads = new Map();
 
     function getProjectId() {
       return treeOperations.getProjectId?.() || null;
@@ -661,7 +662,7 @@
       }
       const attemptStartedAt = Date.now();
       try {
-        const { response, contentType, buffer, timing } = await fetchZipEndpoint(endpoint, remainingMs);
+        const { response, contentType, buffer, timing } = await fetchSharedZipEndpoint(endpoint, remainingMs, params);
         if (!response.ok) {
           attempts.push({
             endpoint,
@@ -736,6 +737,20 @@
         attempts
       }
     };
+  }
+
+  function fetchSharedZipEndpoint(endpoint, timeoutMs, params) {
+    // Only coalesce concurrent background reads. Explicit fresh reads used
+    // for runs and write verification must never join an older download.
+    if (params.force === true) return fetchZipEndpoint(endpoint, timeoutMs);
+    const key = `${endpoint}:${normalizeZipFetchTimeout(params.zipTimeoutMs)}`;
+    const existing = pendingZipDownloads.get(key);
+    if (existing) return existing;
+    const pending = fetchZipEndpoint(endpoint, timeoutMs).finally(() => {
+      if (pendingZipDownloads.get(key) === pending) pendingZipDownloads.delete(key);
+    });
+    pendingZipDownloads.set(key, pending);
+    return pending;
   }
 
   function fetchZipEndpoint(endpoint, timeoutMs) {
@@ -985,6 +1000,7 @@
 
     function invalidateCache() {
       invalidatedAt = Date.now();
+      pendingZipDownloads.clear();
     }
 
     function getInvalidatedAt() {

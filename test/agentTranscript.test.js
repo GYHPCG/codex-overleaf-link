@@ -10,6 +10,15 @@ const {
   translateRawError
 } = require('../extension/src/shared/agentTranscript');
 
+test('performance events show localized timing without exposing raw event payloads', () => {
+  const event = { type: 'codex.performance', status: 'completed',
+    detail: { phase: 'first_output', durationMs: 1250 } };
+  assert.equal(mapAgentEventToActivity(event, { locale: 'zh' }).title, '模型首次文字输出：1.3 秒');
+  assert.equal(mapAgentEventToActivity(event, { locale: 'en' }).title, 'First model text: 1.3s');
+  const unknown = mapAgentEventToActivity({ ...event, detail: { phase: 'unknown', durationMs: 10 } });
+  assert.equal(unknown.visible, false);
+});
+
 test('defaults missing locale to English for user-facing remediation', () => {
   const translated = translateRawError('Mode must be "confirm" or "auto"', { mode: 'ask' });
 

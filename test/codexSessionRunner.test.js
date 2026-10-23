@@ -228,6 +228,12 @@ test('codex app-server transient reconnect notification does not fail the turn',
     ]);
 
     assert.equal(result.settled, 'resolved');
+    const timings = events.filter(event => event.type === 'codex.performance');
+    assert.deepEqual(timings.map(event => event.detail.phase), [
+      'home_ready', 'app_server_ready', 'thread_ready', 'first_output', 'completed'
+    ]);
+    assert.equal(timings.every(event => Number.isFinite(event.detail.durationMs) && event.detail.durationMs >= 0), true);
+    assert.equal(timings.every(event => !Object.hasOwn(event.detail, 'task') && !Object.hasOwn(event.detail, 'content')), true);
     assert.equal(result.value.assistantMessage, 'Recovered answer');
     assert.equal(
       events.some(event =>

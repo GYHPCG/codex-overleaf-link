@@ -68,6 +68,48 @@ const writebackRouterSource = fs.readFileSync(
   'utf8'
 );
 
+test('concurrent background inventory and snapshot share one ZIP download', async () => {
+  let release;
+  let started;
+  const downloadStarted = new Promise(resolve => { started = resolve; });
+  const downloadGate = new Promise(resolve => { release = resolve; });
+  const bridge = createSnapshotHarness({
+    files: { 'main.tex': 'Current text', 'figure.pdf': '%PDF-test' },
+    onFetch: async () => { started(); await downloadGate; }
+  });
+  await bridge.initializeCapability();
+  const list = bridge.call('getProjectFileList', { preferExact: true, zipTimeoutMs: 1000 });
+  await downloadStarted;
+  const snapshot = bridge.call('getProjectSnapshot', { zipOnly: true, includeBinaryFiles: true, zipTimeoutMs: 1000 });
+  await new Promise(setImmediate);
+  assert.equal(bridge.getFetchCount(), 1);
+  release();
+  const [inventory, project] = await Promise.all([list, snapshot]);
+  assert.equal(inventory.ok, true);
+  assert.equal(project.files.find(file => file.path === 'main.tex').content, 'Current text');
+  assert.equal(inventory.files.find(file => file.path === 'figure.pdf').kind, 'binary');
+  assert.equal(bridge.getFetchCount(), 1);
+});
+
+test('forced snapshot does not join an earlier background ZIP download', async () => {
+  let release;
+  let started;
+  const downloadStarted = new Promise(resolve => { started = resolve; });
+  const downloadGate = new Promise(resolve => { release = resolve; });
+  const bridge = createSnapshotHarness({
+    files: { 'main.tex': 'Current text' },
+    onFetch: async () => { started(); await downloadGate; }
+  });
+  await bridge.initializeCapability();
+  const list = bridge.call('getProjectFileList', { preferExact: true, zipTimeoutMs: 1000 });
+  await downloadStarted;
+  const snapshot = bridge.call('getProjectSnapshot', { force: true, zipOnly: true, zipTimeoutMs: 1000 });
+  await new Promise(setImmediate);
+  assert.equal(bridge.getFetchCount(), 2);
+  release();
+  await Promise.all([list, snapshot]);
+});
+
 test('context file list uses the exact Overleaf ZIP file tree and caches it', async () => {
   const bridge = createSnapshotHarness({
     files: {
@@ -1308,7 +1350,7 @@ function createSnapshotHarness({
       fetchCount += 1;
       const endpoint = String(_endpoint || '');
       if (typeof onFetch === 'function') {
-        onFetch({
+        await onFetch({
           endpoint,
           options,
           setActivePath(path) {

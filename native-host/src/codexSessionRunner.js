@@ -9,7 +9,7 @@ const { computeLineDiff } = require('./diffEngine');
 const { computeTextPatches } = require('./textPatch');
 const { buildCodexHomeEnv } = require('./codexHome');
 const { buildCodexSpeedArgs } = require('./codexArgs');
-const { truncateText } = require('./debugLog');
+const { logDebug, truncateText } = require('./debugLog');
 const {
   estimateBase64DecodedBytes,
   reduceTaskResult
@@ -789,6 +789,18 @@ async function runCodexAppServerSession(input) {
 
 function runCodexAppServerProcess(input) {
   return new Promise((resolve, reject) => {
+    const processStartedAt = Date.now();
+    const performanceEnv = input.env || process.env;
+    function reportPerformance(phase, startedAt = processStartedAt, status = 'completed') {
+      const detail = {
+        phase,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        model: input.model || '',
+        reasoningEffort: input.reasoningEffort || ''
+      };
+      logDebug('codex.performance', detail, { env: performanceEnv });
+      emitCodexEvent(input.emit, 'codex.performance', phase, detail, status);
+    }
     if (input.signal?.aborted) {
       reject(getAbortReason(input.signal));
       return;
@@ -799,6 +811,7 @@ function runCodexAppServerProcess(input) {
       installCodexOverleafSkillsTarget: input.installCodexOverleafSkillsTarget === true,
       projectLocalSkills: input.projectLocalSkills || null
     }), input.providerLaunch);
+    reportPerformance('home_ready');
     const codexCommand = resolveCodexCommand(childEnv);
     if (!codexCommand) {
       reject(new Error('Codex CLI was not found. Install Codex or make sure the `codex` command is available in your login shell.'));
@@ -817,6 +830,8 @@ function runCodexAppServerProcess(input) {
     let stderr = '';
     let activeThreadId = String(input.threadId || '');
     let activeTurnId = '';
+    let turnStartedAt = 0;
+    let firstOutputReported = false;
     let controlPublished = false;
     const assistantMessages = new Map();
     const assistantMessageOrder = [];
@@ -892,6 +907,7 @@ function runCodexAppServerProcess(input) {
         capabilities: null
       });
       notify('initialized');
+      reportPerformance('app_server_ready');
       await applyCodexSkillIsolation({
         input,
         childEnv,
@@ -920,6 +936,8 @@ function runCodexAppServerProcess(input) {
         }
       }
 
+      reportPerformance('thread_ready');
+      turnStartedAt = Date.now();
       const turnResponse = await startTurnWithSummaryFallback(activeThreadId);
       activeTurnId = turnResponse?.turn?.id || '';
       publishActiveTurnControl();
@@ -1016,6 +1034,13 @@ function runCodexAppServerProcess(input) {
           publishActiveTurnControl();
         }
         if (activeTurnId) recordAssistantMessage(message);
+        if (activeTurnId && turnStartedAt && !firstOutputReported && (
+          (message.method === 'item/agentMessage/delta' && message.params?.delta)
+          || (message.method === 'item/completed' && message.params?.item?.type === 'agentMessage')
+        )) {
+          firstOutputReported = true;
+          reportPerformance('first_output', turnStartedAt);
+        }
         // For `error` events surface the actual error text as the visible
         // title so the run timeline reads "Reconnecting... 2/5" instead of
         // a generic "error". Other methods continue to use the method name.
@@ -1129,6 +1154,7 @@ function runCodexAppServerProcess(input) {
         return;
       }
       settled = true;
+      reportPerformance('completed');
       const turnEndedError = new Error('Codex turn ended before the pending app-server request completed.');
       turnEndedError.code = 'codex_turn_ended';
       rejectPendingRequests(pending, turnEndedError);
@@ -1143,6 +1169,7 @@ function runCodexAppServerProcess(input) {
     function fail(error) {
       if (settled || stopping) return;
       stopping = true;
+      reportPerformance('failed', processStartedAt, 'failed');
       cleanup();
       rejectPendingRequests(pending, error);
       return stopCodexAppServer(child, {
